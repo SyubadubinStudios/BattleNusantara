@@ -126,7 +126,7 @@ def pack_linux(source, name, archive):
 def is_macho(path):
     """True for Mach-O programs and libraries (thin or universal), the files macOS checks for a signature."""
     with open(path, "rb") as handle:
-        return handle.read(4) in (b"Ïúíþ", b"Îúíþ", b"Êþº¾")
+        return handle.read(4) in (bytes.fromhex("cffaedfe"), bytes.fromhex("cefaedfe"), bytes.fromhex("cafebabe"))
 
 
 def pack_mac(source, rid, archive):
