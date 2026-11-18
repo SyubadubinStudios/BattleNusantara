@@ -123,6 +123,12 @@ def pack_linux(source, name, archive):
         add_text("README.txt", README.format(version=version(), platform="Linux x64", run=LINUX_RUN, server="./lan-server.sh", requirements=LINUX_REQUIREMENTS))
 
 
+def is_macho(path):
+    """True for Mach-O programs and libraries (thin or universal), the files macOS checks for a signature."""
+    with open(path, "rb") as handle:
+        return handle.read(4) in (b"Ïúíþ", b"Îúíþ", b"Êþº¾")
+
+
 def pack_mac(source, rid, archive):
     """Stages the .app bundle and the LAN server on disk, signs them ad hoc on macOS (Apple silicon refuses unsigned
     arm64 programs), then zips the stage keeping the executable bits."""
@@ -140,8 +146,14 @@ def pack_mac(source, rid, archive):
         for path in stage.rglob("*"):
             if path.is_file():
                 path.chmod(mode(path))
-        subprocess.run(["codesign", "--force", "--sign", "-", str(stage / "LAN Server/server/BattleNusantara.Server")], check=True)
-        subprocess.run(["codesign", "--force", "--deep", "--sign", "-", str(app)], check=True)
+        # Each Mach-O program and library is signed on its own. The bundle itself is not sealed: codesign takes folders
+        # with a dot in their name (wwwroot/_content/BattleNusantara.UI) for nested bundles and refuses to seal it.
+        signed = 0
+        for path in sorted(stage.rglob("*")):
+            if path.is_file() and is_macho(path):
+                subprocess.run(["codesign", "--force", "--sign", "-", str(path)], check=True)
+                signed += 1
+        print(f"{rid}: signed {signed} Mach-O files ad hoc")
     else:
         print(f"warning: {rid} was not signed; build it on macOS, or Apple silicon will refuse to run it.")
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zip_file:
