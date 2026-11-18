@@ -41,13 +41,14 @@ public static class Program
                 Interlocked.Increment(ref messages);
                 if (message.Contains("EndInvokeJS", StringComparison.Ordinal)) Interlocked.Increment(ref replies);
             });
-            _ = Task.Delay(TimeSpan.FromSeconds(seconds)).ContinueWith(_ => app.MainWindow.Invoke(() => app.MainWindow.Close()));
+            // Decided here, not after Run: on macOS closing the last window ends the process inside Run.
+            _ = Task.Delay(TimeSpan.FromSeconds(seconds)).ContinueWith(_ =>
+            {
+                Console.WriteLine($"SMOKE messages={messages} interop-replies={replies}");
+                Console.Out.Flush();
+                Environment.Exit(messages > 0 && replies > 0 ? 0 : 2);
+            });
         }
         app.Run();
-        if (smoke)
-        {
-            Console.WriteLine($"SMOKE messages={messages} interop-replies={replies}");
-            Environment.Exit(messages > 0 && replies > 0 ? 0 : 2);
-        }
     }
 }
