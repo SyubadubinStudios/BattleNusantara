@@ -1,0 +1,18 @@
+@page "/"
+@using Microsoft.AspNetCore.Components.Web
+@using BattleNusantara.UI
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <base href="/" />
+    <title>Battle of Nusantara — Syubadubin Studios</title>
+    <link rel="stylesheet" href="_content/BattleNusantara.UI/game.css" />
+    <HeadOutlet />
+</head>
+<body>
+    <GameShell @rendermode="new InteractiveServerRenderMode(prerender: false)" />
+    <script src="_framework/blazor.web.js"></script>
+</body>
+</html>

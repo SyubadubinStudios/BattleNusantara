@@ -1,0 +1,25 @@
+{
+  "name": "battlenusantara",
+  "version": "0.13.0",
+  "description": "Offline Three.js assets and browser checks for Battle of Nusantara",
+  "private": true,
+  "directories": {
+    "doc": "docs",
+    "test": "tests"
+  },
+  "scripts": {
+    "vendor": "node scripts/vendor.mjs",
+    "test": "playwright test",
+    "test:ui": "playwright test --ui"
+  },
+  "keywords": [],
+  "author": "Ariana Mischa Fadhila — Syubadubin Studios",
+  "license": "UNLICENSED",
+  "type": "commonjs",
+  "dependencies": {
+    "three": "0.180.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1"
+  }
+}

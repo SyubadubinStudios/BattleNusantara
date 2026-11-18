@@ -426,3 +426,21 @@ FodyWeavers.xsd
 
 # Official VS Code C# Dev Kit Extension exclusion
 #*.lscache
+
+# ---- Battle of Nusantara ----
+**/bin/
+**/obj/
+.vs/
+node_modules/
+artifacts/
+TestResults/
+playwright-report/
+test-results/
+*.user
+*.log
+.env
+# Embedded account database and its backups
+src/BattleNusantara.Server/data/
+backups/
+# Local MCP configuration (machine-specific paths)
+.mcp.json

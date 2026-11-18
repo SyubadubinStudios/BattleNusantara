@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/BattleNusantara.Core/BattleNusantara.Core.csproj" />
+    <Project Path="src/BattleNusantara.Desktop/BattleNusantara.Desktop.csproj" />
+    <Project Path="src/BattleNusantara.Server/BattleNusantara.Server.csproj" />
+    <Project Path="src/BattleNusantara.UI/BattleNusantara.UI.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/BattleNusantara.Tests/BattleNusantara.Tests.csproj" />
+  </Folder>
+</Solution>

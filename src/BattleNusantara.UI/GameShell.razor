@@ -1,0 +1,576 @@
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+@inject GameClient Client
+@inject NavigationManager Navigation
+
+<div class="game-shell @(Client.View is null ? "menu-state" : "battle-state")">
+    <div class="world" @ref="world" aria-label="@T("Arena tiga dimensi", "Three-dimensional arena")"></div>
+    <div class="vignette"></div>
+    <header class="masthead">
+        <button class="brand" @onclick="Home" aria-label="@T("Menu utama", "Main menu")"><span class="brand-mark">✧</span><span>BATTLE OF<br /><strong>NUSANTARA</strong></span></button>
+        @if (Client.View is null)
+        {
+            <nav aria-label="Main navigation">
+                <button class="@(page == "home" ? "active" : "")" @onclick='() => page = "home"'>@T("BERANDA", "HOME")</button>
+                <button class="@(page == "heroes" ? "active" : "")" @onclick='() => page = "heroes"'>@T("PAHLAWAN", "HEROES")</button>
+                <button class="@(page == "story" ? "active" : "")" @onclick='() => page = "story"'>@T("KRONIK", "CHRONICLE")</button>
+            </nav>
+        }
+        else
+        {
+            <span class="match-label">@Client.View.Mode.ToString().ToUpperInvariant() <span>•</span> @TimeLabel @if (Client.RoomCode is not null) { <b>ROOM @Client.RoomCode</b> } @if (Client.Spectating) { <b class="spectator-tag">@T("PENONTON", "SPECTATOR")</b> } <em class="sky-chip" data-weather="@CurrentSky.Weather" data-phase="@CurrentSky.Phase" title="@T("Kabut dan badai memperpendek jarak pandang semua unit. Waktu hari hanya tampilan.", "Mist and storm shorten every unit's sight. The time of day is visual only.")">@SkyLabel</em></span>
+        }
+        <button class="quiet-button" @onclick='() => OpenPanel("options")'>⚙ <span>@T("Pengaturan", "Settings")</span></button>
+    </header>
+
+    @if (Client.View is { } state)
+    {
+        <div class="battle-top">
+            <div class="objective"><span class="eyebrow">@T("MISI AKTIF", "ACTIVE MISSION")</span><h2>@(state.Mode == GameMode.Adventure ? T("Pulihkan tiga prasasti", "Recover three inscriptions") : T("Pertahankan Jagat Nusantara", "Defend Jagat Nusantara"))</h2><p>@(state.Mode == GameMode.Adventure ? T("Kumpulkan prasasti, lalu kalahkan Sang Kalatidha.", "Collect inscriptions, then defeat Sang Kalatidha.") : (state.Mode == GameMode.Moba ? T("Runtuhkan satu menara untuk membuka gerbang musuh. Pulihkan HP di candi sendiri.", "Topple a tower to expose the enemy gate. Heal beside your shrine.") : T("Hancurkan gerbang musuh. Pulihkan HP di candi sendiri.", "Destroy the enemy gate. Heal beside your shrine.")))</p></div>
+            <div class="resources"><span>◈ <b>@state.Gold</b> @T("Emas", "Gold")</span>@if (state.Mode == GameMode.Rts) { <span>⚑ <b>@state.Supplies</b> @T("Suplai", "Supply")</span> } @if (state.Mode == GameMode.Adventure) { <span>✧ <b>@state.Relics / 3</b> @T("Prasasti", "Inscriptions")</span> } @if (state.Mode == GameMode.Moba) { <span class="tower-count">♜ <b>@state.Units.Count(u => u.Kind == "tower" && u.Team == 0) – @state.Units.Count(u => u.Kind == "tower" && u.Team == 1)</b> @T("Menara", "Towers")</span> @if (state.Buff > 0) { <span class="blessing">✦ @T("Restu", "Blessing") <b>@Math.Ceiling(state.Buff)s</b></span> } @if (state.EnemyBuff > 0) { <span class="enemy-blessing">✦ @T("Restu musuh", "Enemy blessing") <b>@Math.Ceiling(state.EnemyBuff)s</b></span> } }<span>◇ @T("Level", "Level") @state.Level</span></div>
+        </div>
+        <div class="battle-help">@(Client.Spectating ? T("Mode penonton: kamu melihat apa yang dilihat tim dan tidak dapat memberi perintah.", "Spectator mode: you see what the team sees and cannot give orders.") : T("Klik arena untuk bergerak • Serang otomatis • Q Ultimate • W Tameng • Esc Jeda", "Click arena to move • Auto attack • Q Ultimate • W Guard • Esc Pause"))</div>
+        @if (state.Quests is { } quests)
+        {
+            <aside class="quest-log" aria-label="@T("Catatan misi", "Quest log")">
+                <span class="eyebrow">@T("CATATAN MISI", "QUEST LOG")</span>
+                <ol>
+                    @foreach (var quest in quests)
+                    {
+                        var definition = Story.Quest(quest.Id);
+                        var side = Story.SideQuests.Any(q => q.Id == quest.Id);
+                        <li data-quest="@quest.Id" data-state="@quest.State" class="@(side ? "side-quest" : "")"><span>@(quest.State == QuestState.Done ? "✓" : quest.State == QuestState.Active ? "◇" : "·")</span><span>@T(definition.Title, definition.TitleEn)@(quest.Goal > 1 ? $" · {quest.Progress}/{quest.Goal}" : "")</span></li>
+                    }
+                </ol>
+            </aside>
+        }
+        @if (Line is { } line)
+        {
+            <section class="dialogue" aria-live="polite" aria-label="@T("Dialog", "Dialogue")">
+                <span class="eyebrow">@line.Speaker</span>
+                <p>@T(line.Text, line.TextEn)</p>
+                <button @onclick="() => Issue(new GameCommand(CommandKind.AdvanceDialogue))">@T("Lanjut", "Next") ▸</button>
+            </section>
+        }
+        @if (Line is null && NearbyNpc is { } npc)
+        {
+            <section class="npc-ask" data-npc="@npc.Id" aria-live="polite" aria-label="@T("Tanya", "Ask") @npc.Name">
+                <span class="eyebrow">@npc.Name @if (npcAnswer is not null && !npcBusy) { <em class="npc-source" data-source="@npcAnswer.Source">@(npcAnswer.Source == "llm" ? T("jawaban AI", "AI reply") : T("naskah", "scripted"))</em> }</span>
+                <p>@(npcBusy ? T($"{npc.Name} merenung…", $"{npc.Name} ponders…") : npcAnswer?.Text ?? T("Apa yang ingin kau ketahui, pengembara?", "What would you know, traveller?"))</p>
+                <div class="npc-topics">@foreach (var topic in Story.TopicsOf(npc.Id)) { <button disabled="@npcBusy" data-topic="@topic.Id" @onclick="() => AskNpc(topic.Id)">@T(topic.Question, topic.QuestionEn)</button> }</div>
+                <form class="npc-talk" @onsubmit="TalkToNpc" @onsubmit:preventDefault><input id="npc-question" maxlength="@GameClient.MaxNpcQuestion" placeholder="@T("Tulis pertanyaanmu sendiri…", "Type your own question…")" aria-label="@T("Pertanyaan", "Question")" @bind="npcQuestion" @bind:event="oninput" disabled="@npcBusy" /><button type="submit" disabled="@(npcBusy || string.IsNullOrWhiteSpace(npcQuestion))">@T("Tanya", "Ask")</button></form>
+            </section>
+        }
+        @if (state.Mode == GameMode.Rts && !Client.Spectating)
+        {
+            <aside class="tactical-panel" aria-label="@T("Komando pasukan", "Squad command")">
+                <span class="eyebrow">@T("KOMANDO PASUKAN", "SQUAD COMMAND")</span>
+                <div class="selection-summary"><strong>@selection.Count</strong> @T("unit dipilih", "units selected") <small>@OrderLabel</small></div>
+                <div class="tactical-actions">
+                    <button @onclick="SelectHero" disabled="@(Player is null)"><kbd>1</kbd>@T("Pilih hero", "Select hero")</button>
+                    <button @onclick="SelectArmy" disabled="@(!OwnSoldiers.Any())"><kbd>2</kbd>@T("Pilih pasukan", "Select army")</button>
+                    <button @onclick="ToggleAttackMove" aria-pressed="@(attackMove ? "true" : "false")" disabled="@(selection.Count == 0)"><kbd>A</kbd>@T("Serang-bergerak", "Attack-move")</button>
+                    <button @onclick="HoldPosition" disabled="@(selection.Count == 0)"><kbd>H</kbd>@T("Tahan posisi", "Hold position")</button>
+                </div>
+                <div class="unit-roster" aria-label="@T("Unit milikmu", "Your units")">
+                    @foreach (var unit in state.Units.Where(u => u.Owner == Client.Owner && (u.Kind is "hero" or "soldier" or "worker")))
+                    {
+                        <button class="@(selection.Contains(unit.Id) ? "selected" : "")" aria-pressed="@(selection.Contains(unit.Id) ? "true" : "false")" @onclick="() => SelectUnit(unit.Id, true)">@UnitLabel(unit.Kind) @unit.Id @(unit.Cargo > 0 ? $"· {unit.Cargo} ◈" : "")</button>
+                    }
+                </div>
+                <div class="control-groups" aria-label="@T("Grup kontrol", "Control groups")">
+                    @for (var slot = 4; slot <= 6; slot++)
+                    {
+                        var groupSlot = slot;
+                        <div><button data-group="@groupSlot" disabled="@(groups.Count(groupSlot) == 0)" aria-label="@T("Panggil grup", "Recall group") @groupSlot" @onclick="() => ControlGroup(groupSlot, false)"><kbd>@groupSlot</kbd><span>@groups.Count(groupSlot)</span></button>
+                        <button disabled="@(selection.Count == 0)" title="Ctrl+@groupSlot / Alt+@groupSlot" aria-label="@T("Simpan grup", "Save group") @groupSlot" @onclick="() => ControlGroup(groupSlot, true)">+</button></div>
+                    }
+                </div>
+                <svg class="tactical-map" data-tactical-map="true" viewBox="0 0 100 100" role="img" aria-label="@T("Peta taktis; klik untuk memberi tujuan", "Tactical map; click to issue a destination")">
+                    <path d="M13 13L87 87 M13 13L18 87L87 87 M13 13L87 18L87 87" class="map-lanes" />
+                    @foreach (var obstacle in state.Obstacles) { <rect x="@(obstacle.X - obstacle.Width / 2)" y="@(obstacle.Z - obstacle.Depth / 2)" width="@obstacle.Width" height="@obstacle.Depth" class="map-obstacle" /> }
+                    @if (state.Vision.Length > 0)
+                    {
+                        <mask id="fog-mask"><rect width="100" height="100" fill="#fff" />@foreach (var source in state.Vision) { <circle cx="@source.X" cy="@source.Z" r="@source.Radius" fill="#000" /> }</mask>
+                        <rect class="map-fog" width="100" height="100" mask="url(#fog-mask)" />
+                    }
+                    <rect x="9" y="9" width="8" height="8" fill="#83c9ba" /><rect x="83" y="83" width="8" height="8" fill="#d17791" />
+                    @foreach (var resource in state.Resources) { <circle data-resource-id="@resource.Id" cx="@resource.X" cy="@resource.Z" r="3" fill="@(resource.Remaining > 0 ? "#e9c368" : "#59676b")" /> }
+                    @foreach (var post in state.Units.Where(u => u.Kind == "outpost")) { <rect x="@(post.X - 3)" y="@(post.Z - 3)" width="6" height="6" fill="@(post.Construction < 100 ? "#d4b478" : "#83c9ba")" /> }
+                    @foreach (var unit in state.Units.Where(u => u.Kind != "outpost")) { <circle data-unit-id="@unit.Id" cx="@unit.X" cy="@unit.Z" r="@(selection.Contains(unit.Id) ? 2.5 : 1.6)" fill="@unit.Color" stroke="@(selection.Contains(unit.Id) ? "#ffffff" : "none")" stroke-width=".7" /> }
+                </svg>
+                <p class="order-feedback" role="status">@(commandFeedback ?? (buildMode ? T("Klik lokasi pos di tanah terbuka, dalam 55 langkah dari candi. Esc membatalkan.", "Click open ground within 55 units of your shrine to place an outpost. Esc cancels.") : attackMove ? T("Pilih tujuan serangan di arena atau peta.", "Choose an attack destination on the arena or map.") : T("Klik atau seret kotak untuk memilih; Shift menambah. Klik tanah atau peta untuk bergerak.", "Click or drag a box to select; Shift adds. Click ground or map to move.")))</p>
+            </aside>
+            <aside class="economy-panel" aria-label="@T("Ekonomi RTS", "RTS economy")">
+                <span class="eyebrow">@T("JALUR PERBEKALAN", "SUPPLY ROUTES")</span>
+                <p>@T("Pekerja", "Workers") <b>@OwnWorkers.Count() / @Match.MaxWorkersPerPlayer</b> · @T("Pos", "Outposts") <b>@state.Units.Count(u => u.Kind == "outpost") / 4</b></p>
+                <div class="economy-actions"><button @onclick="() => Send(CommandKind.RecruitWorker)" disabled="@(state.Gold < 40 || state.Supplies < 1 || OwnWorkers.Count() >= Match.MaxWorkersPerPlayer)">@T("Latih pekerja", "Train worker") <small>40 ◈ · 1 ⚑</small></button><button @onclick="SelectWorkers" disabled="@(!OwnWorkers.Any())"><kbd>3</kbd>@T("Pilih pekerja", "Select workers")</button></div>
+                <div class="resource-list">@foreach (var resource in state.Resources) { <button @onclick="() => GatherResource(resource.Id)" disabled="@(!WorkersSelected || resource.Remaining == 0)">@T("Tambang", "Mine") @resource.Id <span>@resource.Remaining ◈</span></button> }</div>
+                <p class="collected-gold">@T("Emas disetor", "Gold delivered"): <b>@state.GoldCollected</b></p>
+                <button class="return-cargo" @onclick="() => Issue(new GameCommand(CommandKind.ReturnCargo, UnitIds: selection.ToArray()))" disabled="@(!WorkersSelected || !OwnWorkers.Any(u => selection.Contains(u.Id) && u.Cargo > 0))">@T("Setor muatan", "Return cargo")</button>
+                @if (state.Units.Any(u => u.Kind == "outpost"))
+                {
+                    <div class="construction-list" aria-label="@T("Pembangunan pos", "Outpost construction")">
+                    @foreach (var post in state.Units.Where(u => u.Kind == "outpost").OrderBy(u => u.Queue).ThenBy(u => u.Id))
+                    {
+                        <div class="construction-site" data-site-id="@post.Id">
+                            <span>@T("Pos", "Outpost") @post.Id · @(post.Construction == 100 ? T("Siap", "Ready") : $"{post.Construction}% · #{post.Queue}")</span>
+                            <progress max="100" value="@post.Construction" aria-label="@T("Progres pembangunan", "Construction progress")"></progress>
+                            @if (post.Construction < 100 && post.Owner == Client.Owner)
+                            {
+                                <button disabled="@(!WorkersSelected)" @onclick="() => Issue(new GameCommand(CommandKind.Construct, UnitIds: selection.ToArray(), TargetId: post.Id))">@T("Kerjakan pos", "Work on outpost") @post.Id</button>
+                                @if (post.Queue > 1) { <button @onclick="() => Issue(new GameCommand(CommandKind.PrioritizeConstruction, TargetId: post.Id))">@T("Dahulukan pos", "Prioritize outpost") @post.Id</button> }
+                                <button @onclick="() => Issue(new GameCommand(CommandKind.CancelConstruction, TargetId: post.Id))">@T("Batalkan pos", "Cancel outpost") @post.Id · +@post.CancelRefund ◈</button>
+                            }
+                        </div>
+                    }
+                    </div>
+                }
+                <small>@T("Kerja 8 detik per pos. Pekerja mengikuti antrean; Dahulukan mengubah urutannya. Tahan posisi untuk berhenti. Pembatalan mengembalikan sebagian biaya.", "8 seconds of work per outpost. Builders follow the queue; Prioritize changes its order. Hold to stop. Cancellation refunds part of the cost.")</small>
+            </aside>
+        }
+        <div class="battle-bottom">
+            @if (Client.Spectating)
+            {
+                <section class="hero-hud spectator"><div class="hero-seal" style="--hero-color:var(--jade)">◉</div><div><span class="eyebrow">@T("PENONTON", "SPECTATOR")</span><h3>@T("Menonton ruang", "Watching room") @Client.RoomCode</h3><small>@T("Hanya melihat. Perintah dinonaktifkan.", "View only. Orders are disabled.")</small></div></section>
+            }
+            else
+            {
+            <section class="hero-hud"><div class="hero-seal" style="--hero-color:@SelectedHero.Color"><img src="_content/BattleNusantara.UI/portraits/@(SelectedHero.Id).webp" alt="" /></div><div><span class="eyebrow">@SelectedHero.Role</span><h3>@SelectedHero.Name</h3><progress max="@(Player?.MaxHealth ?? 1)" value="@(Player?.Health ?? 0)"></progress><small class="hero-health">@(state.Respawn > 0 ? T($"Bangkit dalam {Math.Ceiling(state.Respawn)} dtk", $"Respawning in {Math.Ceiling(state.Respawn)}s") : $"{Math.Ceiling(Player?.Health ?? 0)} / {Player?.MaxHealth ?? 0} HP")</small>@if (state.Mode == GameMode.Moba) { <progress class="xp" max="100" value="@((int)(state.Experience * 100))" aria-label="@T("Pengalaman hero", "Hero experience")"></progress> }</div></section>
+            <div class="abilities">
+                <button class="ability" @onclick="Ultimate" disabled="@(state.UltimateCooldown > 0 || Player is null)"><kbd>Q</kbd><span>✧</span><b>@(state.UltimateCooldown > 0 ? $"{Math.Ceiling(state.UltimateCooldown)}s" : SelectedHero.Skill)</b></button>
+                <button class="ability" data-ability="guard" @onclick="Guard" disabled="@(state.GuardCooldown > 0 || Player is null)"><kbd>W</kbd><span>⛨</span><b>@(state.GuardCooldown > 0 ? $"{Math.Ceiling(state.GuardCooldown)}s" : T("Tameng", "Guard"))</b></button>
+                @if (state.Mode == GameMode.Moba)
+                {
+                    @foreach (var item in Catalog.Items)
+                    {
+                        var level = Match.ItemLevel(state.Items, item.Id);
+                        <button class="ability item" data-item="@item.Id" @onclick="() => Issue(new GameCommand(CommandKind.BuyItem, TargetId: item.Id))" disabled="@(level >= Match.MaxItemLevel || state.Gold < Match.ItemCost(item.Id, level))"><span>@(item.Id == 0 ? "†" : item.Id == 1 ? "◍" : "»")</span><b>@T(item.Name, item.NameEn)</b><small>@(level >= Match.MaxItemLevel ? T("Maks", "Max") : $"{Match.ItemCost(item.Id, level)} ◈") · Lv @level</small></button>
+                    }
+                }
+                @if (state.Mode == GameMode.Rts)
+                {
+                    <button class="ability" @onclick="() => Send(CommandKind.Recruit)" disabled="@(state.Gold < 60 || state.Supplies < 2)"><span>⚔</span><b>@T("Rekrut", "Recruit")</b><small>60 ◈</small></button>
+                    <button class="ability" @onclick="ToggleBuild" aria-pressed="@(buildMode ? "true" : "false")" disabled="@(state.Gold < 100 || state.Units.Count(u => u.Kind == "outpost") >= 4)"><kbd>B</kbd><span>⌂</span><b>@T("Bangun pos", "Build outpost")</b><small>100 ◈</small></button>
+                    <button class="ability" @onclick="() => Send(CommandKind.Upgrade)" disabled="@(state.Gold < 140 || state.Level >= 4)"><span>↑</span><b>@T("Upgrade", "Upgrade")</b><small>140 ◈</small></button>
+                }
+            </div>
+            }
+            <div class="base-status"><span>@T("Candi sekutu", "Allied shrine") <b>@Math.Ceiling(state.BaseHealth)</b></span><progress max="900" value="@state.BaseHealth"></progress><span>@T("Gerbang musuh", "Enemy gate") <b>@Math.Ceiling(state.EnemyBaseHealth)</b></span><progress class="enemy" max="900" value="@state.EnemyBaseHealth"></progress></div>
+        </div>
+        @if (state.Status != MatchStatus.Playing)
+        {
+            <div class="modal-backdrop"><section class="panel result" role="dialog" aria-modal="true" aria-label="Match result"><span class="eyebrow">@T("PERTEMPURAN SELESAI", "BATTLE COMPLETE")</span><h1>@(state.Status == MatchStatus.Victory ? T("Nusantara bertahan.", "Nusantara endures.") : T("Gerbang telah runtuh.", "The gate has fallen."))</h1><p>@T("Setiap pertempuran menulis sejarah baru.", "Every battle writes a new history.")</p><button class="primary" @onclick="StartLocal">@T("Main lagi", "Play again") ↗</button><button class="text-button" @onclick="Home">@T("Kembali ke beranda", "Return home")</button></section></div>
+        }
+    }
+    else if (page == "home")
+    {
+        <main class="home-content"><div class="eyebrow"><i></i> @T("SEBUAH LEGENDA. DUNIA YANG BARU.", "AN ANCIENT LEGEND. A WORLD REBORN.")</div><h1>@T("Warisan abadi.", "An enduring legacy.")<br /><em>@T("Pertempuran", "A battle")</em><br />@T("tanpa batas.", "beyond time.")</h1><p>@T("Ketika masa depan bertemu legenda, siapa yang akan menjaga Nusantara? Pimpin para pahlawan melintasi gerbang waktu.", "When the future meets legend, who will protect Nusantara? Lead your heroes through the gates of time.")</p><button class="primary" @onclick='() => OpenPanel("play")'>@T("MULAI PETUALANGAN", "BEGIN YOUR ADVENTURE") <span>↗</span></button><button class="story-link" @onclick='() => page = "story"'><span>▷</span> @T("Jelajahi kisahnya", "Explore the story")</button><div class="edition">PROLOGUE <span> / </span> THE QUANTUM AWAKENING <small>PLAYABLE PROTOTYPE · v0.13</small></div></main>
+        <aside class="location-label"><span>JAWA TENGAH · 2125</span><h2>Borobudur Quantum</h2><p>@T("Di sini, seluruh zaman bertemu.", "Where every era converges.")</p><div class="coordinate">7°36′28″S &nbsp; 110°12′13″E</div></aside>
+        <div class="mode-strip">@foreach (var item in Enum.GetValues<GameMode>()) { <button @onclick="() => ChooseMode(item)"><span class="mode-icon">@(item == GameMode.Rts ? "⚑" : item == GameMode.Moba ? "⚔" : "◇")</span><span><strong>@ModeName(item)</strong><small>@ModeDescription(item)</small></span><span class="mode-arrow">↗</span></button> }</div>
+    }
+    else if (page == "heroes")
+    {
+        <main class="content-page"><span class="eyebrow">@T("PENJAGA LINTAS ZAMAN", "GUARDIANS ACROSS TIME")</span><h1>@T("Pilih legendamu.", "Choose your legend.")</h1><p>@T("Enam penjaga. Satu dunia yang harus diselamatkan.", "Six guardians. One world to save.")</p><div class="hero-grid">@foreach (var hero in Catalog.Heroes) { <button class="hero-card @(hero.Id == heroId ? "selected" : "")" style="--hero-color:@hero.Color" @onclick="() => heroId = hero.Id"><span class="hero-art"><img src="_content/BattleNusantara.UI/portraits/@(hero.Id).webp" alt="@hero.Name" loading="lazy" /></span><span class="eyebrow">@hero.Faction / @hero.Role</span><h2>@hero.Name</h2><p>@HeroDescription(hero)</p><span class="hero-stats">@hero.Health HP <span>·</span> @hero.Damage ATK</span><small>@hero.Skill @(hero.Id == heroId ? "✓" : "")</small></button> }</div><button class="primary" @onclick='() => OpenPanel("play")'>@T("Bertempur bersama", "Fight alongside") @SelectedHero.Name ↗</button></main>
+    }
+    else if (page == "story")
+    {
+        <main class="content-page chronicle"><span class="eyebrow">THE QUANTUM AWAKENING</span><h1>@T("Sejarah belum berakhir.", "History is not over.")</h1><div class="story-columns"><article><span class="chapter">2125 / PENEMUAN</span><h2>@T("Prasasti Sang Hyang Jagat", "The Sang Hyang Jagat inscription")</h2><p>@T("Penelitian Quantum Nusantara menemukan artefak yang menghubungkan berbagai dimensi Indonesia. Kerajaan, dunia modern, mitologi, dan legenda bertabrakan menjadi satu realitas: Perang Jagat Nusantara.", "Quantum Nusantara researchers discover an artifact linking Indonesia’s many dimensions. Kingdoms, modern cities, mythology, and legends collide in a single reality: the War of Jagat Nusantara.")</p></article><article><span class="chapter">BOROBUDUR / PERTAHANAN TERAKHIR</span><h2>Sang Kalatidha</h2><p>@T("Sang Kalatidha ingin menghapus sejarah dan budaya dari seluruh dimensi. Di Borobudur Quantum, para penjaga harus memulihkan tiga prasasti dan menutup gerbang kehancuran.", "Sang Kalatidha seeks to erase history and culture across every dimension. At Borobudur Quantum, the guardians must restore three inscriptions and close the gate of destruction.")</p></article></div><button class="primary" @onclick="() => ChooseMode(GameMode.Adventure)">@T("Masuki cerita", "Enter the story") ↗</button></main>
+    }
+
+    <footer><span>SYUBADUBIN <b>STUDIOS</b></span><small>Dibuat oleh Ariana Mischa Fadhila dari Syubadubin Studios</small><button @onclick='() => OpenPanel("credits")'>@T("Kredit", "Credits") ↗</button></footer>
+
+    @if (panel is not null)
+    {
+        <div class="modal-backdrop" @onclick="ClosePanel"><section class="panel @(panel == "credits" ? "credits-panel" : "")" role="dialog" aria-modal="true" aria-label="@PanelTitle" @onclick:stopPropagation="true" tabindex="-1" @ref="dialog">
+            <div class="panel-heading"><span class="eyebrow">@PanelTitle</span><button class="close" @onclick="ClosePanel" aria-label="@T("Tutup", "Close")">×</button></div>
+            @if (panel == "play")
+            {
+                <h2>@T("Satu gerbang. Tiga takdir.", "One gate. Three destinies.")</h2><div class="mode-tabs">@foreach (var item in Enum.GetValues<GameMode>()) { <button class="@(mode == item ? "selected" : "")" @onclick="() => mode = item">@ModeName(item)</button> }</div><p>@ModeDescription(mode)</p>
+                <label for="hero">@T("Pahlawan", "Hero")</label><select id="hero" @bind="heroId">@foreach (var hero in Catalog.Heroes) { <option value="@hero.Id">@hero.Name · @hero.Role</option> }</select>
+                <div class="mission-note">@T("Klik tanah untuk bergerak. Hero menyerang musuh terdekat secara otomatis. Gunakan Q untuk ultimate; kembali ke candi untuk memulihkan HP.", "Click the ground to move. Your hero attacks nearby enemies automatically. Press Q for your ultimate; return to the shrine to heal.")</div>
+                <button class="primary wide" disabled="@busy" @onclick="StartLocal">@T("MAIN SOLO", "PLAY SOLO") ↗</button>
+                @if (savedGame is not null) { <button class="secondary wide" disabled="@busy" @onclick="ContinueSaved">@T("Lanjutkan simpanan Adventure", "Continue saved Adventure")</button> }
+                <details class="account" open="@(accountOpen || Client.AccountName is not null || Client.Queued)"><summary>@T("Akun dan matchmaking", "Account and matchmaking")</summary>
+                    @if (Client.Queued)
+                    {
+                        <p class="queue-status" role="status">@T("Mencari pemain", "Finding players") · @ModeName(mode) · <b>@(Client.Queue?.Waiting ?? 1) / @(Client.Queue?.Needed ?? 2)</b></p>
+                        <button class="secondary wide" disabled="@busy" @onclick="CancelQueue">@T("Batalkan pencarian", "Cancel search")</button>
+                    }
+                    else if (Client.AccountName is { } account)
+                    {
+                        <p class="account-summary">@T("Masuk sebagai", "Signed in as") <b>@account</b> · @(Client.Profile?.Played ?? 0) @T("pertandingan", "matches") · @(Client.Profile?.Wins ?? 0) @T("menang", "wins")</p>
+                        @if (Client.Profile is { Recent.Length: > 0 } profile)
+                        {
+                            <ul class="recent-matches" aria-label="@T("Pertandingan terakhir", "Recent matches")">
+                                @foreach (var result in profile.Recent.Take(3)) { <li><span class="@(result.Won ? "won" : "lost")">@(result.Won ? T("Menang", "Won") : T("Kalah", "Lost"))</span> @ModeName(result.Mode) · @HeroName(result.Hero) · @TimeSpan.FromSeconds(result.Seconds).ToString(@"mm\:ss")</li> }
+                            </ul>
+                        }
+                        @if (Client.QueueClosed is { } closed) { <p class="error" role="alert">@QueueClosedText(closed)</p> }
+                        <button class="secondary wide" disabled="@busy" @onclick="FindMatch">@T("Cari pertandingan", "Find a match") · @ModeName(mode)</button>
+                        <button class="text-button" disabled="@busy" @onclick="SignOut">@T("Keluar dari akun", "Sign out")</button>
+                    }
+                    else
+                    {
+                        <p class="account-summary">@T("Akun menyimpan hasil pertandinganmu dan membuka matchmaking di server", "An account keeps your match results and unlocks matchmaking on server") <b>@serverUrl</b>.</p>
+                        <label for="account-name">@T("Nama akun (3–20 huruf, angka, atau _)", "Account name (3–20 letters, digits or _)")</label><input id="account-name" @bind="accountName" maxlength="20" autocomplete="username" />
+                        <label for="account-password">@T("Kata sandi (minimal 8 karakter)", "Password (at least 8 characters)")</label><input id="account-password" type="password" @bind="accountPassword" maxlength="128" autocomplete="current-password" />
+                        <div class="account-actions"><button class="secondary" disabled="@busy" @onclick="() => SignIn(false)">@T("Masuk", "Sign in")</button><button class="secondary" disabled="@busy" @onclick="() => SignIn(true)">@T("Daftar akun baru", "Register")</button></div>
+                    }
+                </details>
+                <details><summary>@T("Bermain bersama · LAN co-op (hingga 10 pemain)", "Play together · LAN co-op (up to 10 players)")</summary><label for="server">@T("Alamat server", "Server address")</label><input id="server" @bind="serverUrl" placeholder="http://localhost:5080" /><label for="code">@T("Kode ruang (kosongkan untuk membuat)", "Room code (leave empty to create)")</label><input id="code" @bind="roomCode" @bind:event="oninput" maxlength="6" placeholder="A1B2C3" /><button class="secondary wide" disabled="@busy" @onclick="() => Connect(false)">@T("Buat / gabung ruang", "Create / join room")</button><button class="text-button" disabled="@(busy || string.IsNullOrWhiteSpace(roomCode))" @onclick="() => Connect(true)">@T("Tonton ruang (perlu kode)", "Watch room (code required)")</button></details>
+            }
+            else if (panel == "options")
+            {
+                <h2>@T("Atur perjalananmu.", "Make it your journey.")</h2><label for="language">@T("Bahasa", "Language")</label><select id="language" @bind="settings.Language" @bind:after="SaveSettings"><option value="id">Bahasa Indonesia</option><option value="en">English</option></select><label for="quality">@T("Kualitas grafis", "Graphics quality")</label><select id="quality" @bind="settings.Quality" @bind:after="SaveSettings"><option value="high">@T("Tinggi", "High")</option><option value="low">@T("Hemat daya", "Power saving")</option></select><label class="check"><input type="checkbox" @bind="settings.ReducedMotion" @bind:after="SaveSettings" /> @T("Kurangi animasi", "Reduce motion")</label><label class="check"><input type="checkbox" id="cinematics" @bind="settings.Cinematics" @bind:after="SaveSettings" /> @T("Sinematik pembuka", "Opening cinematic")</label><label class="check"><input type="checkbox" id="voices" @bind="settings.Voices" @bind:after="SaveSettings" /> @T("Suara dialog", "Dialogue voices")</label><label for="volume">@T("Volume ambience", "Ambient volume") · @settings.Volume%</label><input id="volume" type="range" min="0" max="100" @bind="settings.Volume" @bind:after="SaveSettings" /><p>@T("Pengaturan disimpan pada perangkat ini.", "Settings are saved on this device.")</p>
+                @if (Client.View is not null) { <button class="secondary wide" @onclick="Home">@T("Akhiri permainan dan kembali", "End game and return home")</button> }
+            }
+            else if (panel == "pause")
+            {
+                <h2>@T("Sejenak, sebelum legenda berlanjut.", "A moment before the legend continues.")</h2><p>@(Client.RoomCode is null ? T("Permainan dijeda.", "Game paused.") : T("Ruang bersama tetap berjalan.", "The shared room keeps running."))</p><button class="primary wide" @onclick="ClosePanel">@T("Lanjutkan", "Resume")</button>
+                @if (Client.RoomCode is null && Client.View is { Mode: GameMode.Adventure, Status: MatchStatus.Playing }) { <button class="secondary wide" @onclick="SaveGame">@T("Simpan permainan", "Save game")</button> }
+                @if (saveNotice is not null) { <p class="save-notice" role="status">@saveNotice</p> }
+                <button class="text-button" @onclick="Home">@T("Akhiri permainan", "End game")</button>
+            }
+            else if (panel == "credits")
+            {
+                <h2>@T("Di balik legenda.", "Behind the legend.")</h2><div class="credits-window" tabindex="0"><div class="credits-roll"><span>CREATED BY</span><h2>Ariana Mischa Fadhila</h2><p>Syubadubin Studios</p><span>WORLD &amp; VISION</span><h2>Battle of Nusantara</h2><p>@T("Terinspirasi sejarah, budaya, dan mitologi Indonesia.", "Inspired by Indonesian history, culture, and mythology.")</p><span>TECHNOLOGY</span><p>.NET 10 · Blazor Hybrid · WPF<br />Three.js · ASP.NET Core · SignalR</p><span>ART PIPELINE</span><p>@T("Candi, 24 karakter, naga, dan properti asli", "Original shrine, 24 characters, naga and props") · Blender MCP<br />@T("Potret hero", "Hero portraits") · GPT Image (Rodin MCP)</p><span>VOICES</span><p>@T("Suara dialog", "Dialogue voices") · ElevenLabs</p><span>MUSIC</span><p>@T("Gamelan sintesis, digubah untuk game ini", "Synthesized gamelan, composed for this game")</p><h2>@T("Untuk Nusantara.", "For Nusantara.")</h2><p>Dibuat oleh Ariana Mischa Fadhila<br />dari Syubadubin Studios</p></div></div><small>@T("Arahkan pointer atau fokus untuk menghentikan guliran.", "Hover or focus to pause scrolling.")</small>
+            }
+            @if (error is not null) { <p class="error" role="alert">@error</p> }
+        </section></div>
+    }
+    @if (Client.Reconnecting) { <div class="reconnect-banner" role="status">@T("Koneksi terputus. Menyambung ulang…", "Connection lost. Reconnecting…")</div> }
+    @if (Client.NetworkError is not null) { <div class="error-banner" role="alert">@Client.NetworkError <button @onclick="Home">@T("Beranda", "Home")</button></div> }
+    @if (renderError is not null) { <div class="error-banner" role="alert">@renderError</div> }
+</div>
+
+@code {
+    private ElementReference world, dialog;
+    private IJSObjectReference? renderer;
+    private DotNetObjectReference<GameShell>? reference;
+    private string page = "home", heroId = "gajah-mada", serverUrl = "http://localhost:5080", roomCode = "";
+    private string? panel, error, renderError, savedGame, saveNotice;
+    private string accountName = "", accountPassword = "";
+    private bool accountOpen; // Keeps the section open after signing out or a failed attempt.
+    private string HeroName(string id) => Catalog.Heroes.FirstOrDefault(h => h.Id == id)?.Name ?? id;
+    private string QueueClosedText(string reason) => reason switch
+    {
+        "expired" => T("Tidak ada pemain lain dalam dua menit. Coba lagi.", "No other player appeared within two minutes. Try again."),
+        "replaced" => T("Akun ini mulai mencari dari perangkat lain.", "This account started searching from another device."),
+        _ => T("Pertandingan tidak dapat dibentuk. Coba lagi.", "The match could not be formed. Try again.")
+    };
+    private async Task StoreSession()
+    {
+        if (renderer is null) return;
+        var session = Client.Session;
+        await renderer.InvokeVoidAsync("saveSession", session?.Server, session?.Token);
+    }
+    private async Task SignIn(bool register)
+    {
+        busy = true; error = null; accountOpen = true;
+        try
+        {
+            var failure = await Client.SignIn(serverUrl, accountName.Trim(), accountPassword, register);
+            accountPassword = "";
+            error = failure switch
+            {
+                null => null,
+                "name" => T("Nama akun harus 3–20 huruf, angka, atau garis bawah.", "The account name must be 3–20 letters, digits or underscores."),
+                "password" => T("Kata sandi harus 8–128 karakter.", "The password must be 8–128 characters."),
+                "taken" => T("Nama akun sudah dipakai.", "That account name is taken."),
+                "credentials" => T("Nama akun atau kata sandi salah.", "Wrong account name or password."),
+                "limit" => T("Terlalu banyak percobaan. Tunggu satu menit.", "Too many attempts. Wait a minute."),
+                _ => T("Server akun tidak dapat dihubungi.", "The account server could not be reached.")
+            };
+            if (failure is null) await StoreSession();
+        }
+        catch (ArgumentException) { error = T("Alamat server tidak valid.", "The server address is not valid."); }
+        finally { busy = false; }
+    }
+    private async Task SignOut() { busy = true; accountOpen = true; try { await Client.SignOut(); await StoreSession(); } finally { busy = false; } }
+    private async Task FindMatch()
+    {
+        busy = true; error = null;
+        try { ResetOrders(); await Client.FindMatch(mode, heroId); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { Console.Error.WriteLine(ex); error = T("Matchmaking tidak tersedia. Masuk ulang atau periksa server.", "Matchmaking is unavailable. Sign in again or check the server."); }
+        finally { busy = false; }
+    }
+    private async Task CancelQueue() { busy = true; try { await Client.CancelQueue(); } finally { busy = false; } }
+    private DialogueLine? Line
+    {
+        get
+        {
+            var value = Client.View?.Dialogue;
+            if (string.IsNullOrEmpty(value)) return null;
+            var split = value.LastIndexOf(':');
+            return split > 0 && int.TryParse(value.AsSpan(split + 1), out var index) && Story.Dialogues.TryGetValue(value[..split], out var lines) && index >= 0 && index < lines.Length ? lines[index] : null;
+        }
+    }
+    private GameMode mode = GameMode.Rts;
+    private GameSettings settings = new();
+    private bool busy, disposed, focusDialog;
+    private bool attackMove, buildMode;
+    private readonly HashSet<int> selection = new();
+    private readonly TacticalGroups groups = new();
+    private string? commandFeedback;
+    private IEnumerable<UnitView> OwnSoldiers => Client.View?.Units.Where(u => u.Owner == Client.Owner && u.Kind == "soldier") ?? [];
+    private IEnumerable<UnitView> OwnWorkers => Client.View?.Units.Where(u => u.Owner == Client.Owner && u.Kind == "worker") ?? [];
+    private bool WorkersSelected => selection.Count > 0 && selection.All(id => OwnWorkers.Any(w => w.Id == id));
+    private string UnitLabel(string kind) => kind switch { "worker" => T("Pekerja", "Worker"), "soldier" => T("Prajurit", "Soldier"), _ => "Hero" };
+    private string OrderLabel
+    {
+        get
+        {
+            var orders = Client.View?.Units.Where(u => selection.Contains(u.Id)).Select(u => u.Order).Distinct().ToArray() ?? [];
+            if (orders.Length != 1) return T("Campuran", "Mixed");
+            return orders[0] switch { UnitOrder.Construct => T("Membangun", "Constructing"), UnitOrder.Gather => T("Mengumpulkan", "Gathering"), UnitOrder.Move => T("Bergerak", "Moving"), UnitOrder.AttackMove => T("Serang-bergerak", "Attack-moving"), UnitOrder.Hold => T("Tahan posisi", "Holding"), _ => T("Otomatis", "Automatic") };
+        }
+    }
+    private int refreshPending;
+    private HeroDefinition SelectedHero => Catalog.Hero(heroId);
+    private UnitView? Player => Client.View?.Units.FirstOrDefault(u => u.Kind == "hero" && u.Owner == Client.Owner);
+    private NpcAnswer? npcAnswer;
+    private bool npcBusy;
+    private string npcQuestion = "", npcShown = "";
+    // An NPC can be questioned once it has been met and the player's hero stands beside it.
+    private NpcDefinition? NearbyNpc
+    {
+        get
+        {
+            if (Client.View is not { Mode: GameMode.Adventure, Status: MatchStatus.Playing } view || Client.Spectating) return null;
+            var hero = view.Units.FirstOrDefault(u => u.Kind == "hero" && u.Owner == Client.Owner);
+            if (hero is null) return null;
+            foreach (var unit in view.Units)
+            {
+                if (unit.Kind != "npc" || Math.Pow(hero.X - unit.X, 2) + Math.Pow(hero.Z - unit.Z, 2) > 100) continue;
+                var met = unit.Model == Story.CaptainNpc
+                    ? view.Quests?.LastOrDefault()?.Id is { } side && side != Story.Captain
+                    : view.Quests?.FirstOrDefault(q => q.Id == Story.Keeper)?.State == QuestState.Done;
+                if (met && Story.Npc(unit.Model) is { } npc)
+                {
+                    // A fresh conversation for each NPC.
+                    if (npcShown != npc.Id) { npcShown = npc.Id; npcAnswer = null; }
+                    return npc;
+                }
+            }
+            return null;
+        }
+    }
+    private async Task AskNpc(string topic)
+    {
+        if (npcBusy) return;
+        npcBusy = true; StateHasChanged();
+        try { npcAnswer = await Client.AskNpc(serverUrl, topic, settings.Language); }
+        finally { npcBusy = false; StateHasChanged(); }
+    }
+    private async Task TalkToNpc()
+    {
+        if (npcBusy || NearbyNpc is not { } npc || string.IsNullOrWhiteSpace(npcQuestion)) return;
+        npcBusy = true; StateHasChanged();
+        try { npcAnswer = await Client.TalkToNpc(serverUrl, npc.Id, npcQuestion, settings.Language) ?? npcAnswer; npcQuestion = ""; }
+        finally { npcBusy = false; StateHasChanged(); }
+    }
+    private Sky CurrentSky => Atmosphere.At(Client.View?.Tick ?? 0);
+    private string SkyLabel => (CurrentSky.Weather switch { "mist" => T("🌫 Kabut", "🌫 Mist"), "rain" => T("🌧 Hujan", "🌧 Rain"), "storm" => T("⛈ Badai", "⛈ Storm"), _ => T("☀ Cerah", "☀ Clear") })
+        + " · " + (CurrentSky.Phase switch { "night" => T("Malam", "Night"), "dusk" => T("Senja", "Dusk"), "dawn" => T("Fajar", "Dawn"), _ => T("Siang", "Day") });
+    private string TimeLabel => TimeSpan.FromSeconds((Client.View?.Tick ?? 0) * .1).ToString(@"mm\:ss");
+    private string PanelTitle => panel switch { "play" => T("PRASASTI MENUNGGUMU", "THE INSCRIPTION AWAITS"), "options" => T("PENGATURAN", "SETTINGS"), "credits" => "SYUBADUBIN STUDIOS", _ => T("JEDA", "PAUSE") };
+    private string T(string id, string en) => settings.Language == "en" ? en : id;
+    private string ModeName(GameMode value) => value switch { GameMode.Rts => "RTS Skirmish", GameMode.Moba => "MOBA Arena", _ => "Adventure" };
+    private string ModeDescription(GameMode value) => value switch { GameMode.Rts => T("Bangun. Pimpin. Taklukkan.", "Build. Command. Conquer."), GameMode.Moba => T("Lima lawan lima. Tiga jalur.", "Five against five. Three lanes."), _ => T("Pulihkan prasasti yang hilang.", "Recover the lost inscriptions.") };
+    private string HeroDescription(HeroDefinition hero) => settings.Language == "id" ? hero.Description : hero.Id switch { "gajah-mada" => "An oath to unite the archipelago. Lead the vanguard and break enemy lines.", "cut-nyak-dien" => "Courage from Aceh. Strike swiftly from the front line.", "nyi-roro-kidul" => "Guardian of the southern sea. Sweep away the forces of Kalatidha.", "bledhek" => "A lightning fighter from the slopes of Merapi. His strike leaps from foe to foe, then he darts away like a flash.", "rara-angkasa" => "A sky guardian of giant strength. She flies onto the enemy and strikes the ground with a shockwave.", _ => "A guardian from 2125, armed with quantum energy." };
+
+    protected override void OnInitialized()
+    {
+        Client.Changed += OnChanged;
+        if (!new Uri(Navigation.BaseUri).Host.StartsWith("0.0.0.", StringComparison.Ordinal)) serverUrl = Navigation.BaseUri.TrimEnd('/');
+    }
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            try
+            {
+                renderer = await JS.InvokeAsync<IJSObjectReference>("import", "./_content/BattleNusantara.UI/world.js");
+                settings = await renderer.InvokeAsync<GameSettings>("loadSettings");
+                reference = DotNetObjectReference.Create(this);
+                savedGame = await renderer.InvokeAsync<string?>("loadGame");
+                if (await renderer.InvokeAsync<StoredSession?>("loadSession") is { Server: { } storedServer, Token: { } storedToken } && !await Client.Resume(storedServer, storedToken))
+                    await renderer.InvokeVoidAsync("saveSession", null, null);
+                await renderer.InvokeVoidAsync("mount", world, reference, settings);
+                await Refresh();
+                StateHasChanged();
+            }
+            catch (JSException) { renderError = T("Arena 3D gagal dimuat. Aktifkan WebGL dan muat ulang aplikasi.", "The 3D arena could not load. Enable WebGL and reload the application."); StateHasChanged(); }
+        }
+        if (focusDialog) { focusDialog = false; await dialog.FocusAsync(); }
+    }
+    private void OnChanged() => _ = Refresh();
+    private async Task Refresh()
+    {
+        if (disposed || Interlocked.Exchange(ref refreshPending, 1) != 0) return;
+        try
+        {
+            await InvokeAsync(async () =>
+            {
+                if (disposed) return;
+                if (panel == "play" && Client.View is not null) ClosePanel(); // Matchmaking seated us while the panel was open.
+                selection.IntersectWith(Client.View?.Units.Where(u => u.Owner == Client.Owner).Select(u => u.Id) ?? []);
+                groups.Prune(Client.View, Client.Owner);
+                if (selection.Count == 0 && Player is { } hero) selection.Add(hero.Id);
+                if (renderer is not null) await renderer.InvokeVoidAsync("update", Client.View, Client.Owner, selection.ToArray(), attackMove, buildMode, Client.View is null ? null : CurrentSky);
+                StateHasChanged();
+            });
+        }
+        catch (JSDisconnectedException) { }
+        catch (ObjectDisposedException) { }
+        finally { Interlocked.Exchange(ref refreshPending, 0); }
+    }
+    private void OpenPanel(string name) { if (name == "play" && Client.AccountName is not null) _ = Client.RefreshProfile().ContinueWith(_ => InvokeAsync(StateHasChanged), TaskScheduler.Default); panel = name; error = null; saveNotice = null; focusDialog = true; if (Client.RoomCode is null) Client.Paused = true; }
+    private void ClosePanel() { panel = null; error = null; Client.Paused = false; }
+    private void ChooseMode(GameMode selected) { mode = selected; OpenPanel("play"); }
+    private void ResetOrders() { selection.Clear(); groups.Clear(); attackMove = buildMode = false; commandFeedback = null; }
+    private async Task StartLocal() { ResetOrders(); await Client.StartLocal(mode, heroId); ClosePanel(); await Refresh(); }
+    private async Task Home() { await Client.Leave(); ResetOrders(); ClosePanel(); page = "home"; await Refresh(); }
+    private async Task SaveGame()
+    {
+        error = null; saveNotice = null;
+        var json = await Client.Save();
+        if (json is not null && renderer is not null && await renderer.InvokeAsync<bool>("saveGame", json))
+        { savedGame = json; saveNotice = T("Permainan tersimpan di perangkat ini.", "Game saved on this device."); }
+        else error = T("Permainan tidak dapat disimpan.", "The game could not be saved.");
+    }
+    private async Task ContinueSaved()
+    {
+        if (savedGame is null) return;
+        string? hero = null;
+        try { using var document = System.Text.Json.JsonDocument.Parse(savedGame); hero = document.RootElement.GetProperty("Hero").GetString(); }
+        catch (Exception ex) when (ex is System.Text.Json.JsonException or KeyNotFoundException or InvalidOperationException) { }
+        ResetOrders();
+        if (hero is null || !await Client.StartSaved(savedGame))
+        {
+            savedGame = null; error = T("Simpanan rusak dan telah dihapus.", "The save was damaged and has been removed.");
+            if (renderer is not null) await renderer.InvokeVoidAsync("clearGame");
+            return;
+        }
+        heroId = hero; mode = GameMode.Adventure; ClosePanel(); await Refresh();
+    }
+    private async Task Connect(bool watch)
+    {
+        busy = true; error = null;
+        try { ResetOrders(); await Client.Connect(serverUrl, roomCode, mode, heroId, watch); ClosePanel(); await Refresh(); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { Console.Error.WriteLine(ex); error = watch ? T("Tidak dapat menonton. Periksa alamat server dan kode ruang.", "Could not watch. Check the server address and room code.") : T("Tidak dapat bergabung. Periksa alamat server, kode ruang, dan kapasitas ruang.", "Could not join. Check the server address, room code, and room capacity."); }
+        finally { busy = false; }
+    }
+    private async Task Send(CommandKind kind)
+    {
+        await Issue(new GameCommand(kind));
+    }
+    private Task Ultimate() => Send(CommandKind.Ultimate);
+    private Task Guard() => Send(CommandKind.Guard);
+    private async Task Issue(GameCommand command)
+    {
+        try
+        {
+            var accepted = await Client.Command(command);
+            commandFeedback = accepted ? T("Perintah diterima.", "Order accepted.") : T("Perintah ditolak. Pilih unit sendiri dan tanah yang terbuka; periksa biaya atau cooldown.", "Order rejected. Select your units and open ground; check cost or cooldown.");
+            if (accepted) attackMove = buildMode = false;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or Microsoft.AspNetCore.SignalR.HubException or OperationCanceledException)
+        { commandFeedback = T("Perintah gagal. Periksa koneksi server.", "Command failed. Check the server connection."); }
+        await Refresh();
+    }
+    [JSInvokable] public async Task MoveTo(double x, double z)
+    {
+        if (panel is not null) return;
+        if (buildMode) { await Issue(new GameCommand(CommandKind.Build, x, z)); return; }
+        await Issue(new GameCommand(attackMove ? CommandKind.AttackMove : CommandKind.Move, x, z,
+            Client.View?.Mode == GameMode.Rts ? selection.ToArray() : null));
+    }
+    [JSInvokable] public async Task SelectUnit(int id, bool additive)
+    {
+        if (panel is not null || Client.View?.Mode != GameMode.Rts || !Client.View.Units.Any(u => u.Id == id && u.Owner == Client.Owner && (u.Kind is "hero" or "soldier" or "worker"))) return;
+        buildMode = false;
+        if (!additive) selection.Clear();
+        if (!selection.Remove(id) && selection.Count < Match.MaxSelection) selection.Add(id);
+        commandFeedback = null;
+        await Refresh();
+    }
+    private async Task SelectHero() { selection.Clear(); if (Player is { } hero) selection.Add(hero.Id); attackMove = buildMode = false; commandFeedback = null; await Refresh(); }
+    [JSInvokable] public async Task SelectUnits(int[] ids, bool additive)
+    {
+        if (panel is not null || Client.View?.Mode != GameMode.Rts || ids.Length > Match.MaxUnits) return;
+        var owned = TacticalGroups.Filter(ids, Client.View, Client.Owner);
+        if (owned.Length == 0) commandFeedback = T("Tidak ada unit milikmu dalam kotak.", "No owned units inside the box.");
+        else
+        {
+            var selected = TacticalGroups.Filter(additive ? selection.Concat(owned) : owned, Client.View, Client.Owner);
+            selection.Clear(); selection.UnionWith(selected);
+            attackMove = buildMode = false; commandFeedback = null;
+        }
+        await Refresh();
+    }
+    [JSInvokable] public async Task ControlGroup(int slot, bool save)
+    {
+        if (panel is not null || Client.View?.Mode != GameMode.Rts || slot is < 4 or > 6) return;
+        if (save)
+            commandFeedback = groups.Save(slot, selection, Client.View, Client.Owner)
+                ? T($"Grup {slot} disimpan.", $"Group {slot} saved.") : T("Pilih unit milikmu terlebih dahulu.", "Select your units first.");
+        else
+        {
+            var recalled = groups.Recall(slot, Client.View, Client.Owner);
+            if (recalled.Length == 0) commandFeedback = T($"Grup {slot} kosong.", $"Group {slot} is empty.");
+            else { selection.Clear(); selection.UnionWith(recalled); attackMove = buildMode = false; commandFeedback = null; }
+        }
+        await Refresh();
+    }
+    private async Task SelectArmy()
+    {
+        var army = OwnSoldiers.Take(Match.MaxSelection).Select(u => u.Id).ToArray();
+        if (army.Length == 0) return;
+        selection.Clear(); selection.UnionWith(army); attackMove = buildMode = false; commandFeedback = null; await Refresh();
+    }
+    private async Task SelectWorkers()
+    {
+        var workers = OwnWorkers.Select(u => u.Id).ToArray();
+        if (workers.Length == 0) return;
+        selection.Clear(); selection.UnionWith(workers); attackMove = buildMode = false; commandFeedback = null; await Refresh();
+    }
+    [JSInvokable] public Task GatherResource(int id) => panel is null ? Issue(new GameCommand(CommandKind.Gather, UnitIds: selection.ToArray(), TargetId: id)) : Task.CompletedTask;
+    private async Task ToggleBuild() { buildMode = !buildMode; attackMove = false; commandFeedback = null; await Refresh(); }
+    private async Task ToggleAttackMove() { attackMove = !attackMove; buildMode = false; commandFeedback = null; await Refresh(); }
+    private Task HoldPosition() => Issue(new GameCommand(CommandKind.HoldPosition, UnitIds: selection.ToArray()));
+    [JSInvokable] public async Task Key(string key)
+    {
+        if (key == "Escape") { if (panel is not null) ClosePanel(); else if (attackMove || buildMode) { attackMove = buildMode = false; commandFeedback = null; await Refresh(); } else if (Client.View is not null) OpenPanel("pause"); }
+        else if (panel is null && key == "q") await Ultimate();
+        else if (panel is null && key == "w") await Guard();
+        else if (panel is null && Client.View?.Mode == GameMode.Rts)
+        {
+            if (key == "1") await SelectHero();
+            else if (key == "2") await SelectArmy();
+            else if (key == "a") await ToggleAttackMove();
+            else if (key == "h") await HoldPosition();
+            else if (key == "3") await SelectWorkers();
+            else if (key == "b") await ToggleBuild();
+        }
+        await InvokeAsync(StateHasChanged);
+    }
+    private async Task SaveSettings() { if (renderer is not null) await renderer.InvokeVoidAsync("settings", settings); }
+    public async ValueTask DisposeAsync()
+    {
+        disposed = true; Client.Changed -= OnChanged;
+        if (renderer is not null) { try { await renderer.InvokeVoidAsync("dispose"); await renderer.DisposeAsync(); } catch (JSDisconnectedException) { } }
+        reference?.Dispose();
+    }
+    public sealed record StoredSession(string? Server, string? Token);
+    public sealed class GameSettings
+    {
+        public string Language { get; set; } = "id";
+        public string Quality { get; set; } = "high";
+        public bool ReducedMotion { get; set; }
+        public int Volume { get; set; } = 20;
+        public bool Cinematics { get; set; } = true;
+        public bool Voices { get; set; } = true;
+    }
+}

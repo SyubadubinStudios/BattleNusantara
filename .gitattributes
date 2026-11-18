@@ -1,0 +1,9 @@
+# The project uses LF line endings everywhere (see .editorconfig).
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.webp binary
+*.glb binary
+*.blend binary
+*.mp3 binary
+*.ico binary
