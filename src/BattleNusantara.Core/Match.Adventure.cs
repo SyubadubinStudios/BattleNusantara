@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace BattleNusantara.Core;
 
@@ -148,8 +149,9 @@ public sealed partial class Match
     }
 
     private static readonly JsonSerializerOptions SaveOptions = new() { IncludeFields = false };
-    private static readonly HashSet<string> SavableKinds = ["hero", "relic", "boss", "guardian", "npc", "artifact", "warden", "flotsam", "spirit"];
-    private static readonly HashSet<string> SavableModels = ["", Story.KeeperNpc, Story.CaptainNpc, "kalatidha"];
+    private static readonly HashSet<string> SavableKinds = ["hero", "relic", "boss", "guardian", "npc", "artifact", "warden", "flotsam", "spirit", "creep", "wild", "loot"];
+    private static readonly HashSet<string> SavableModels = new HashSet<string>(["", Story.KeeperNpc, Story.CaptainNpc, "kalatidha"])
+        .Concat(Catalog.Creeps.Select(c => c.Model)).Concat(Catalog.Wildlife.Select(w => w.Model)).Concat(Catalog.Loot.Select(l => l.Id)).ToHashSet();
 
     /// <summary>
     /// Serializes a solo Adventure match in progress; null for anything else. Cached routes are dropped so that
@@ -164,12 +166,17 @@ public sealed partial class Match
             Version = SaveData.Current, Seed = Seed, SideStarted = sideStarted, SideDone = sideDone, Hero = players[0].Id, Tick = Tick, Gold = Gold, NextId = nextId, Message = Message,
             Cooldown = cooldowns[0], GuardCooldown = guardCooldowns[0], Collected = collected.Order().ToArray(),
             QuestsDone = Story.Quests.Select(q => q.Id).Where(questsDone.Contains).ToArray(),
+            Camps = camps.Select(c => new SavedCamp { Id = c.Definition.Id, RespawnTicks = c.RespawnTicks, Clears = c.Clears, AlertTicks = c.AlertTicks }).ToArray(),
+            Wild = wildRespawns.Select(w => new SavedWild { Model = w.Model, X = w.X, Z = w.Z, Ticks = w.Ticks }).ToArray(),
+            Treasures = Treasures(0).ToArray(),
             DialogueKey = dialogueKey, DialogueLine = dialogueLine, DialogueTicks = dialogueTicks, Pending = pendingDialogues.ToArray(),
             Units = units.Select(u => new SavedUnit
             {
                 Id = u.Id, Owner = u.Owner, Kind = u.Kind, Team = u.Team, Damage = u.Damage, Color = u.Color, X = u.X, Z = u.Z, TargetX = u.TargetX, TargetZ = u.TargetZ,
                 Health = u.Health, MaxHealth = u.MaxHealth, AttackCooldown = u.AttackCooldown, OrderX = u.OrderX, OrderZ = u.OrderZ, Order = u.Order,
-                GuardTicks = u.GuardTicks, Invulnerable = u.Invulnerable, RouteX = u.RouteX, RouteZ = u.RouteZ, Model = u.Kind == "hero" ? "" : u.Model
+                GuardTicks = u.GuardTicks, Invulnerable = u.Invulnerable, RouteX = u.RouteX, RouteZ = u.RouteZ, Model = u.Kind == "hero" || u.Model.Length == 0 ? null : u.Model,
+                CampId = u.CampId, HomeX = u.HomeX, HomeZ = u.HomeZ, SpeedBonus = u.SpeedBonus, Cargo = u.Cargo, ProvokedTicks = u.ProvokedTicks, Retreating = u.Retreating, Ticks = u.GatherTicks,
+                Hit = u.LastHitTeam + 1, Boost = u.BoostTicks
             }).ToArray()
         };
         return JsonSerializer.Serialize(data, SaveOptions);
@@ -183,7 +190,8 @@ public sealed partial class Match
         try { data = JsonSerializer.Deserialize<SaveData>(json, SaveOptions); }
         catch (Exception exception) when (exception is JsonException or NotSupportedException) { return null; }
         // Version 1 saves (v0.10 to v0.12) predate the captain and the side quest; they load with the side quest not started.
-        if (data is not { Version: 1 or SaveData.Current, Units: not null, QuestsDone: not null, Collected: not null, Pending: not null, Hero: not null, Message: not null }) return null;
+        // Versions 1 and 2 predate neutral camps and wildlife; those are placed fresh.
+        if (data is not { Version: 1 or 2 or SaveData.Current, Units: not null, QuestsDone: not null, Collected: not null, Pending: not null, Hero: not null, Message: not null }) return null;
         if (!Catalog.Heroes.Any(h => h.Id == data.Hero) || data.Tick < 0 || data.Gold is < 0 or > 1_000_000 || data.Units.Length is 0 or > MaxUnits) return null;
         if (!Good(data.Cooldown, 0, 60) || !Good(data.GuardCooldown, 0, 60) || data.Message.Length > 300) return null;
         if (data.QuestsDone.Any(q => Story.Quests.All(known => known.Id != q)) || data.QuestsDone.Distinct().Count() != data.QuestsDone.Length) return null;
@@ -199,7 +207,14 @@ public sealed partial class Match
         {
             if (unit?.Kind is null || unit.Color is null || !SavableKinds.Contains(unit.Kind) || unit.Color.Length > 9 || unit.Id <= 0 || unit.Id > data.NextId) return null;
             if (unit.Model is not null && !SavableModels.Contains(unit.Model)) return null;
-            if (unit.Team is < 0 or > 2 || !Enum.IsDefined(unit.Order) || unit.Damage is < 0 or > 1000 || unit.GuardTicks is < 0 or > GuardTicks) return null;
+            if (!Good(unit.HomeX, 0, 100) || !Good(unit.HomeZ, 0, 100) || !Good(unit.SpeedBonus, 0, 1) || unit.Cargo is < 0 or > 1000 || unit.ProvokedTicks is < 0 or > 1000 || unit.Ticks is < 0 or > 1000) return null;
+            if (unit.Hit is < 0 or > 4 || unit.Boost is < 0 or > 100) return null;
+            var neutral = unit.Kind is "creep" or "wild" or "loot";
+            if (neutral && data.Version < SaveData.Current) return null;
+            if (unit.Kind == "creep" && (Catalog.Creep(unit.Model ?? "") is null || Maps.Default(GameMode.Adventure).Camps.All(c => c.Id != unit.CampId))) return null;
+            if (unit.Kind == "wild" && Catalog.Wild(unit.Model ?? "") is null) return null;
+            if (unit.Kind == "loot" && Catalog.LootItem(unit.Model ?? "") is null) return null;
+            if (unit.Team is < 0 or > 3 || (unit.Team == 3) != (unit.Kind is "creep" or "wild") || !Enum.IsDefined(unit.Order) || unit.Damage is < 0 or > 1000 || unit.GuardTicks is < 0 or > GuardTicks) return null;
             if (!Good(unit.X, 0, 100) || !Good(unit.Z, 0, 100) || !Good(unit.TargetX, 0, 100) || !Good(unit.TargetZ, 0, 100) || !Good(unit.OrderX, 0, 100) || !Good(unit.OrderZ, 0, 100)) return null;
             if (!Good(unit.RouteX, 0, 100) || !Good(unit.RouteZ, 0, 100) || !Good(unit.MaxHealth, 1, 5000) || !Good(unit.Health, 0.000001, unit.MaxHealth) || !Good(unit.AttackCooldown, -1e7, 10)) return null;
         }
@@ -210,6 +225,16 @@ public sealed partial class Match
         if ((!data.SideStarted || data.SideDone) && objectives > 0) return null;
         if (data.SideStarted && objectives > Story.PlanSideQuest(data.Seed).Count) return null;
         if (data.Units.Count(u => u is { Kind: "npc", Model: Story.CaptainNpc }) > 1) return null;
+        var campIds = Maps.Default(GameMode.Adventure).Camps.Select(c => c.Id).ToHashSet();
+        if (data.Version == SaveData.Current)
+        {
+            if (data.Camps is null || data.Wild is null || data.Treasures is null) return null;
+            if (data.Camps.Length != campIds.Count || data.Camps.Any(c => c is null || !campIds.Contains(c.Id) || c.RespawnTicks is < 0 or > 5000 || c.Clears is < 0 or > 10000 || c.AlertTicks is < 0 or > 1000)) return null;
+            if (data.Camps.Select(c => c.Id).Distinct().Count() != data.Camps.Length) return null;
+            if (data.Wild.Length > 64 || data.Wild.Any(w => w is null || Catalog.Wild(w.Model ?? "") is null || !Good(w.X, 0, 100) || !Good(w.Z, 0, 100) || w.Ticks is < 0 or > WildRespawnTicks)) return null;
+            if (data.Treasures.Length > MaxTreasures || data.Treasures.Any(t => Catalog.LootItem(t ?? "") is null)) return null;
+            if (data.Units.Count(u => u.Kind == "creep") > campIds.Count * 3 || data.Units.Count(u => u.Kind == "loot") > MaxLootOnGround) return null;
+        }
 
         var match = new Match(GameMode.Adventure, data.Hero, data.Version == 1 ? 0 : data.Seed);
         match.units.Clear(); match.questsDone.Clear(); match.pendingDialogues.Clear(); match.collected.Clear();
@@ -219,12 +244,36 @@ public sealed partial class Match
                 Id = u.Id, Owner = u.Owner, Kind = u.Kind!, Team = u.Team, Damage = u.Damage, Color = u.Color!, X = u.X, Z = u.Z, TargetX = u.TargetX, TargetZ = u.TargetZ,
                 Health = u.Health, MaxHealth = u.MaxHealth, AttackCooldown = u.AttackCooldown, OrderX = u.OrderX, OrderZ = u.OrderZ, Order = u.Order,
                 GuardTicks = u.GuardTicks, Invulnerable = u.Invulnerable, RouteX = u.RouteX, RouteZ = u.RouteZ, HomeX = 24, HomeZ = 24,
-                Model = u.Kind == "hero" ? data.Hero : u.Kind == "npc" && string.IsNullOrEmpty(u.Model) ? Story.KeeperNpc : u.Kind == "boss" && string.IsNullOrEmpty(u.Model) ? "kalatidha" : u.Model ?? ""
+                Model = u.Kind == "hero" ? data.Hero : u.Kind == "npc" && string.IsNullOrEmpty(u.Model) ? Story.KeeperNpc : u.Kind == "boss" && string.IsNullOrEmpty(u.Model) ? "kalatidha" : u.Model ?? "",
+                CampId = u.CampId, SpeedBonus = u.SpeedBonus, Cargo = u.Cargo, ProvokedTicks = u.ProvokedTicks, Retreating = u.Retreating, GatherTicks = u.Ticks,
+                LastHitTeam = data.Version == SaveData.Current ? u.Hit - 1 : -1, BoostTicks = u.Boost
             });
+        if (data.Version == SaveData.Current)
+            foreach (var (saved, unit) in data.Units.Zip(match.units))
+            {
+                // Version 3 keeps every home; earlier versions only needed the hero's, which is its arrival point.
+                unit.HomeX = saved.HomeX; unit.HomeZ = saved.HomeZ;
+            }
         match.nextId = data.NextId;
         if (data.Version == 1 && !match.units.Exists(u => u.Model == Story.CaptainNpc) && match.units.Count < MaxUnits)
             match.Spawn(-1, "npc", 2, CaptainPosition.X, CaptainPosition.Z, 1, 0, "#e0b07a").Model = Story.CaptainNpc;
         match.sideStarted = data.SideStarted; match.sideDone = data.SideDone;
+        if (data.Version == SaveData.Current)
+        {
+            foreach (var saved in data.Camps!)
+            {
+                var camp = match.camps.First(c => c.Definition.Id == saved.Id);
+                camp.RespawnTicks = saved.RespawnTicks; camp.Clears = saved.Clears; camp.AlertTicks = saved.AlertTicks;
+            }
+            foreach (var wild in data.Wild!) match.wildRespawns.Add(new PendingWild(wild.Model!, wild.X, wild.Z, wild.Ticks));
+            if (data.Treasures!.Length > 0) match.treasures[0] = data.Treasures.Select(t => t!).ToList();
+        }
+        else
+        {
+            // An older save: the camps and the wildlife arrive now.
+            foreach (var camp in match.camps) match.SpawnCamp(camp);
+            match.SpawnWildlife();
+        }
         match.Tick = data.Tick; match.Gold = data.Gold; match.Message = data.Message;
         match.cooldowns[0] = data.Cooldown; match.guardCooldowns[0] = data.GuardCooldown;
         foreach (var id in data.Collected) match.collected.Add(id);
@@ -239,8 +288,11 @@ public sealed partial class Match
 
     private sealed class SaveData
     {
-        public const int Current = 2;
+        public const int Current = 3;
         public int Version { get; set; }
+        public SavedCamp[]? Camps { get; set; }
+        public SavedWild[]? Wild { get; set; }
+        public string[]? Treasures { get; set; }
         public int Seed { get; set; }
         public bool SideStarted { get; set; }
         public bool SideDone { get; set; }
@@ -263,9 +315,12 @@ public sealed partial class Match
     private sealed class SavedUnit
     {
         public int Id { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
         public int Owner { get; set; }
         public string? Kind { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
         public int Team { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
         public int Damage { get; set; }
         public string? Color { get; set; }
         public double X { get; set; }
@@ -274,14 +329,56 @@ public sealed partial class Match
         public double TargetZ { get; set; }
         public double Health { get; set; }
         public double MaxHealth { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
         public double AttackCooldown { get; set; }
         public double OrderX { get; set; }
         public double OrderZ { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
         public UnitOrder Order { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
         public int GuardTicks { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
         public bool Invulnerable { get; set; }
         public double RouteX { get; set; }
         public double RouteZ { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
         public string? Model { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public int CampId { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public double HomeX { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public double HomeZ { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public double SpeedBonus { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public int Cargo { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public int ProvokedTicks { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public bool Retreating { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public int Ticks { get; set; }
+        /// <summary>LastHitTeam + 1, so the common "never hit" is the default and is not written.</summary>
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public int Hit { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public int Boost { get; set; }
+    }
+
+    private sealed class SavedCamp
+    {
+        public int Id { get; set; }
+        public int RespawnTicks { get; set; }
+        public int Clears { get; set; }
+        public int AlertTicks { get; set; }
+    }
+
+    private sealed class SavedWild
+    {
+        public string? Model { get; set; }
+        public double X { get; set; }
+        public double Z { get; set; }
+        public int Ticks { get; set; }
     }
 }

@@ -99,7 +99,7 @@ public sealed class SessionSweeper(AccountService accounts, ILogger<SessionSweep
 
 public static class ServerHost
 {
-    public const string Version = "0.13.0";
+    public const string Version = "0.14.0";
 
     /// <summary>Builds the server. Tests pass <paramref name="ui"/> = false to skip the Blazor UI and its static assets.</summary>
     public static WebApplication Build(string[] args, bool ui = true, Action<WebApplicationBuilder>? configure = null)

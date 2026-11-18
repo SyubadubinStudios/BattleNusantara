@@ -89,11 +89,11 @@ public sealed class GameClient : IAsyncDisposable
 
     public GameClient() => loop = RunAsync();
 
-    public async Task StartLocal(GameMode mode, string hero)
+    public async Task StartLocal(GameMode mode, string hero, string? map = null)
     {
         await Leave();
         await gate.WaitAsync();
-        try { local = new Match(mode, hero, Random.Shared.Next()); Owner = 0; Paused = false; View = local.Snapshot(); }
+        try { local = new Match(mode, hero, Random.Shared.Next(), map); Owner = 0; Paused = false; View = local.Snapshot(); }
         finally { gate.Release(); }
         Changed?.Invoke();
     }
@@ -221,7 +221,7 @@ public sealed class GameClient : IAsyncDisposable
         Changed?.Invoke();
     }
 
-    public async Task Connect(string endpoint, string? code, GameMode mode, string hero, bool watch = false)
+    public async Task Connect(string endpoint, string? code, GameMode mode, string hero, bool watch = false, string? map = null)
     {
         var uri = Address(endpoint);
         var room = code?.Trim().ToUpperInvariant();
@@ -234,7 +234,9 @@ public sealed class GameClient : IAsyncDisposable
             await hub.StartAsync(cancellation.Token);
             var joined = watch
                 ? await hub.InvokeAsync<RoomJoined>("Watch", room, cancellation.Token)
-                : await hub.InvokeAsync<RoomJoined>(string.IsNullOrEmpty(room) ? "Create" : "Join", string.IsNullOrEmpty(room) ? mode.ToString() : room, hero, cancellation.Token);
+                : string.IsNullOrEmpty(room)
+                    ? await hub.InvokeAsync<RoomJoined>("Create", mode.ToString(), hero, map, cancellation.Token)
+                    : await hub.InvokeAsync<RoomJoined>("Join", room, hero, cancellation.Token);
             connection = hub;
             Apply(joined);
             Changed?.Invoke();

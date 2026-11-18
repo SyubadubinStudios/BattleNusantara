@@ -499,7 +499,7 @@ public sealed class PlatformHostTests
             await using var expired = await Hub(url, "not-a-real-token");
             await Assert.ThrowsAsync<HubException>(() => expired.InvokeAsync<QueueStatus>("Queue", "Rts", "gajah-mada"));
             // Guests can still play by room code on a server that does not require accounts.
-            Assert.Equal(0, (await guest.InvokeAsync<RoomJoined>("Create", "Rts", "gajah-mada")).Owner);
+            Assert.Equal(0, (await guest.InvokeAsync<RoomJoined>("Create", "Rts", "gajah-mada", (string?)null)).Owner);
 
             await using var first = await Hub(url, ana.Token); await using var second = await Hub(url, budi.Token);
             var firstSeat = new TaskCompletionSource<RoomJoined>(); var secondSeat = new TaskCompletionSource<RoomJoined>();
@@ -642,9 +642,9 @@ public sealed class PlatformHostTests
             using var http = new HttpClient { BaseAddress = new Uri(url) };
             var ana = await Register(http, "Ana");
             await using var member = await Hub(url, ana.Token);
-            var room = await member.InvokeAsync<RoomJoined>("Create", "Rts", "gajah-mada");
+            var room = await member.InvokeAsync<RoomJoined>("Create", "Rts", "gajah-mada", (string?)null);
             await using var guest = await Hub(url, null);
-            await Assert.ThrowsAsync<HubException>(() => guest.InvokeAsync<RoomJoined>("Create", "Rts", "gajah-mada"));
+            await Assert.ThrowsAsync<HubException>(() => guest.InvokeAsync<RoomJoined>("Create", "Rts", "gajah-mada", (string?)null));
             await Assert.ThrowsAsync<HubException>(() => guest.InvokeAsync<RoomJoined>("Join", room.Code, "republik"));
             await Assert.ThrowsAsync<HubException>(() => guest.InvokeAsync<RoomJoined>("Watch", room.Code));
         }

@@ -22,7 +22,7 @@ const port = Number(process.env.DESKTOP_SMOKE_PORT) || 9223;
     console.log('WebView pages:', browser.contexts().flatMap(c => c.pages()).map(p => p.url()));
     let page;
     for (let i = 0; i < 40; i++) {
-      page = browser.contexts().flatMap(c => c.pages()).find(p => p.url().includes('0.0.0.'));
+      page = browser.contexts().flatMap(c => c.pages()).find(p => /0\.0\.0\.|\/\/localhost\/|^app:/.test(p.url())); // WPF BlazorWebView or Photino
       if (page) break;
       await new Promise(r => setTimeout(r, 500));
     }
@@ -72,7 +72,7 @@ const port = Number(process.env.DESKTOP_SMOKE_PORT) || 9223;
     expect(economyBounds.y + economyBounds.height).toBeLessThanOrEqual(hudBounds.y);
     const resourceBounds = await page.locator('.resources').boundingBox();
     expect(economyBounds.y).toBeGreaterThanOrEqual(resourceBounds.y + resourceBounds.height + 8);
-    await page.screenshot({ path: 'docs/screenshots/desktop.png' });
+    await page.screenshot({ path: process.env.SMOKE_SCREENSHOT || 'docs/screenshots/desktop.png' });
     if (errors.length) throw new Error(errors.join('\n'));
     console.log('PASS: WPF + offline rendering + squad orders + worker deposits + construction + cancellation + dynamic outpost navigation.');
   } finally {

@@ -9,5 +9,13 @@ let utils = await readFile(new URL('../node_modules/three/examples/jsm/utils/Buf
 await writeFile(new URL('BufferGeometryUtils.js', root), utils.replaceAll("from 'three'", "from './three.module.js'"));
 const skeleton = await readFile(new URL('../node_modules/three/examples/jsm/utils/SkeletonUtils.js', import.meta.url), 'utf8');
 await writeFile(new URL('SkeletonUtils.js', root), skeleton.replaceAll("from 'three'", "from './three.module.js'"));
+// Post-processing (bloom, output and FXAA) for the high-quality setting, flattened into the vendor folder.
+const passes = ['EffectComposer', 'RenderPass', 'ShaderPass', 'MaskPass', 'Pass', 'UnrealBloomPass', 'OutputPass'];
+const shaders = ['CopyShader', 'LuminosityHighPassShader', 'OutputShader', 'FXAAShader'];
+for (const [folder, names] of [['postprocessing', passes], ['shaders', shaders]])
+  for (const name of names) {
+    const source = await readFile(new URL(`../node_modules/three/examples/jsm/${folder}/${name}.js`, import.meta.url), 'utf8');
+    await writeFile(new URL(`${name}.js`, root), source.replaceAll("from 'three'", "from './three.module.js'").replace(/'\.\.\/shaders\/(\w+)\.js'/g, "'./$1.js'"));
+  }
 await copyFile(new URL('../node_modules/three/LICENSE', import.meta.url), new URL('THREE-LICENSE.txt', root));
-console.log('Vendored Three.js, GLTFLoader and SkeletonUtils for offline runtime.');
+console.log('Vendored Three.js, GLTFLoader, SkeletonUtils and post-processing for offline runtime.');

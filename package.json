@@ -1,6 +1,6 @@
 {
   "name": "battlenusantara",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "description": "Offline Three.js assets and browser checks for Battle of Nusantara",
   "private": true,
   "directories": {

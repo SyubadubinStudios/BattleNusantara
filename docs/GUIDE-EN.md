@@ -4,9 +4,9 @@ Created by Ariana Mischa Fadhila, Syubadubin Studios.
 
 ## Setup
 
-Follow the README commands from the repository root. Install .NET SDK 10, and WebView2 Evergreen Runtime for the Windows desktop application. Browser hosting can run independently of WPF; on Linux/macOS, build the Server project rather than the Windows solution. Use a current patched .NET 10 runtime for deployments.
+Follow the README commands from the repository root. Install .NET SDK 10, and WebView2 Evergreen Runtime for the Windows desktop application. Browser hosting can run independently of WPF. On Linux and macOS, `src/BattleNusantara.Photino` is the desktop game (it needs WebKitGTK 4.1 on Linux) and the Server project runs as everywhere else; build those two projects rather than the whole solution, whose WPF project is Windows-only. Ready-made Linux and macOS downloads are on the Releases page (see the README). Use a current patched .NET 10 runtime for deployments.
 
-The main menu uses an original animated Blender shrine. Hero selection changes health, damage, color, and ultimate identity. Units are geometric gameplay markers, not finished character art.
+The main menu shows the original Blender shrine of Borobudur Quantum in a valley between a volcano and the sea. Hero selection changes health, damage, colour and ultimate. Every unit is a rigged Blender model.
 
 ## Controls and objectives
 
@@ -111,7 +111,7 @@ Public matchmaking and internet deployment require additional security work.
 
 ## Options and troubleshooting
 
-Language, graphics quality, reduced motion, the opening cinematic, and ambient volume persist in localStorage. Audio starts after the first pointer interaction. Power-saving mode lowers pixel density and disables shadows and particles. Hover or focus the credits to pause scrolling; reduced motion enables manual scrolling.
+Language, graphics quality, reduced motion, the opening cinematic, dialogue voices and the sound volume persist in localStorage. Sound starts after the first click or key press. Power-saving mode lowers pixel density, turns off shadows and bloom, draws lighter characters, a quarter of the scattered nature and fewer particles. On a computer without a usable GPU (software rendering) the high setting also runs without bloom and shadows. Hover or focus the credits to pause scrolling; reduced motion enables manual scrolling.
 
 If the arena cannot load, enable WebGL2/GPU acceleration. Run `npm ci` and `npm run vendor` if vendor files are missing. Ensure the GLB exists under `src/BattleNusantara.UI/wwwroot/models/`. For LAN errors, check the host address, firewall port 5080, and room capacity.
 
@@ -119,7 +119,7 @@ The easiest install is the installer from the Releases page. To build it yoursel
 
 ## World, weather and the opening shot
 
-Each match opens with a five-second camera move; press any key or click to skip it, or untick **Opening cinematic** in Settings. The chip beside the match clock shows the weather and the time of day. A day lasts six minutes and the weather changes every 45 seconds: clear, mist, rain or storm. **Mist and storm shorten sight** (to 80% and 75%) for every unit; darkness and rain are visual only. With **Reduce motion** on there is no cinematic, no falling rain and no lightning; the chip still tells you the weather. Sound follows the match: rain can be heard, and a low tense layer with drum hits comes in while units are being hurt.
+Each match opens with a five-second camera move; press any key or click to skip it, or untick **Opening cinematic** in Settings. The chip beside the match clock shows the weather and the time of day. A day lasts six minutes and the weather changes every 45 seconds: clear, mist, rain or storm. **Mist and storm shorten sight** (to 80% and 75%) for every unit; darkness and rain are visual only. With **Reduce motion** on there is no cinematic, no falling rain and no lightning; the chip still tells you the weather. Sound follows the match: rain and thunder can be heard, and the battle layer of the music rises while units are being hurt.
 
 ![Rain at dusk](screenshots/weather-rain.png)
 
@@ -139,7 +139,52 @@ In Adventure, walk to the western shore to meet the Old Captain. He gives a side
 
 ## Sound
 
-Dialogue is voiced in the selected language; untick **Dialogue voices** in Settings to read only. The music follows the match and picks up when fighting starts. Mist and storm now shorten how far everyone sees, in every mode.
+Dialogue is voiced in the selected language; untick **Dialogue voices** in Settings to read only. The title screen plays the "Borobudur Quantum" theme. In a match the exploration music plays, and when fighting breaks out its battle layer (taiko, strings, brass and choir) rises over it in time with the music. A stinger marks victory or defeat. You hear the day (wind and birds), the night (crickets and frogs) and the rain, and effects such as blows, ultimates, loot, level-ups, cleared camps, building, mining and the animals come from where they happen on screen. **Sound volume** in Settings sets the overall level.
+
+## Maps
+
+Each mode has its own maps, chosen in the play panel under **Map**; the size is shown beside the name.
+
+| Map | Mode | Size | What sets it apart |
+| --- | --- | --- | --- |
+| Temple Valley | RTS | medium (100) | Temple ruins, three mines, four camps |
+| Southern Shore | RTS | small (80) | A narrow shore between two lagoons; fast, close fighting |
+| Forbidden Forest | RTS | large (140) | Groves that block sight, four mines, seven camps including an ancient one |
+| Jagat Arena | MOBA | medium (100) | Three lanes, Naga Basuki in the southern jungle, four camps |
+| Savanna Ring | MOBA | small (80) | Short lanes, fights start sooner |
+| Dragon Bridges | MOBA | large (140) | A river with three bridges and the dragon's ford, seven camps |
+| Inscription Isle | Adventure | medium (100) | The story island |
+
+Water blocks walking but not sight; ruins, rocks and groves block both. The tactical map in RTS is drawn to the map's size.
+
+![Forbidden Forest](screenshots/map-hutan-larangan.png)
+
+## Camera
+
+Roll the **mouse wheel** to zoom between a close look and the whole map. Pan with the **arrow keys** or by dragging with the **middle mouse button**. **F** centres on your hero; **Home** returns to the whole map.
+
+## Jungle camps and treasure
+
+Camps are marked by torches and a ring of stones, and as rings on the RTS tactical map coloured by tier. **Weak** camps hold three tuyul; **Medium** camps monkey and tiger siluman; **Strong** camps crocodile siluman and a genderuwo; **Ancient** camps Banaspati, a fire spirit, with tiger siluman. Monsters attack your units that come close and call the rest of their camp; they chase only so far and then walk home to heal, so you can pull back and return. Your troops defend themselves but only your hero goes after a camp on its own; enemy armies leave camps alone.
+
+A cleared camp returns after one to four minutes (stronger camps take longer) and drops treasure, marked by a pillar of light in the colour of its rarity. Walk your hero over it to take it for the rest of the match:
+
+| Treasure | Rarity | Effect |
+| --- | --- | --- |
+| Turmeric Tonic (jamu) | minor | +20 HP and heals 60% |
+| Whetstone | minor | +4 attack |
+| Sea-Root Bracelet | minor | +40 HP |
+| Seven-Wave Keris | major | +10 attack |
+| Dragon-Scale Mail | major | +110 HP |
+| Lightning Sandals | major | +15% speed |
+| Banaspati Gem | legendary | +15 attack, +150 HP, +10% speed, full heal |
+| Treasure Chest | treasure | +200 gold |
+
+Weak camps drop a minor item half the time; medium camps a minor one and sometimes a major one; strong camps a major one and sometimes a minor one; ancient camps a legendary item, a major one and the chest. Your finds are listed under your hero's health. In MOBA, monsters also give experience.
+
+## Wildlife and villagers
+
+Animals live in the regions that suit them. The **mouse-deer** runs from anyone. The **water buffalo** grazes and fights back only when hit. The **wild boar** charges anything that comes close and then returns to its patch. In RTS, the **thieving macaque** steals the gold a worker is carrying and runs home with it; defeat it before it has been home for thirty seconds to get the gold back. Animals give a little gold when your side defeats them and come back later. Villagers, chickens, birds, butterflies and fireflies are scenery: they live only on your screen and never take part in the battle.
 
 ## Guard
 

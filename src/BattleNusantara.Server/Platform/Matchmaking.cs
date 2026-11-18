@@ -164,11 +164,14 @@ public sealed class Matchmaker(IQueueStore queue, RoomRegistry rooms, PlatformOp
 
         var seated = new List<(QueueTicket Ticket, RoomJoined Joined)>();
         string? code = null;
+        // Matchmade rooms rotate through the mode's maps.
+        var maps = Maps.For(mode).ToArray();
+        var map = maps[Random.Shared.Next(maps.Length)].Id;
         foreach (var member in group)
         {
             try
             {
-                var joined = rooms.Enter(member.Connection, code ?? mode.ToString(), member.Hero, code is null, member.Account);
+                var joined = rooms.Enter(member.Connection, code ?? mode.ToString(), member.Hero, code is null, member.Account, code is null ? map : null);
                 code = joined.Code; seated.Add((member, joined));
             }
             catch (HubException) { notices.Add(new(member.Connection, Closed, "unavailable")); }

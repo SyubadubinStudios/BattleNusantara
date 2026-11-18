@@ -37,7 +37,7 @@ public sealed class MobaTests
     public void Setup_OtherModes_HaveNoMobaUnitsAndExposedBases(GameMode mode)
     {
         var match = new Match(mode, "gajah-mada");
-        Assert.DoesNotContain(match.Snapshot(fog: false).Units, u => u.Kind is "tower" or "champion" || u.Team == 3);
+        Assert.DoesNotContain(match.Snapshot(fog: false).Units, u => u.Kind is "tower" or "champion" || u.Model == "naga");
         Assert.True(match.BaseExposed(0));
         Assert.False(match.Execute(0, new(CommandKind.BuyItem, TargetId: 2)));
     }
@@ -192,14 +192,14 @@ public sealed class MobaTests
         var gold = 0;
         while (match.Snapshot().EnemyBuff == 0 && match.Tick < 9000 && match.Status == MatchStatus.Playing)
         {
-            var boss = match.Snapshot().Units.SingleOrDefault(u => u.Team == 3);
+            var boss = match.Snapshot().Units.SingleOrDefault(u => u.Kind == "boss");
             if (boss is not null) Assert.Equal((66d, 34d), (boss.X, boss.Z));
             gold = match.Gold;
             match.Advance();
         }
         Assert.InRange(match.Snapshot().EnemyBuff, 59, 60);
         Assert.Equal(0, match.Snapshot().Buff);
-        Assert.DoesNotContain(match.Snapshot().Units, u => u.Team == 3);
+        Assert.DoesNotContain(match.Snapshot().Units, u => u.Kind == "boss");
         Assert.True(match.Gold < gold + 150, "The allied side earns no boss bounty when the enemy lands the last hit.");
     }
 
@@ -291,23 +291,23 @@ public sealed class MobaTests
         }
         var gold = 0;
         // Enemy hunters may have claimed the boss already; wait for it to return.
-        while (!match.Snapshot().Units.Any(u => u.Team == 3) && match.Tick < 6000) match.Advance();
+        while (!match.Snapshot().Units.Any(u => u.Kind == "boss") && match.Tick < 6000) match.Advance();
         // Enemy champions may interrupt the first attempt; the hero returns after respawning.
-        while (match.Snapshot().Units.Any(u => u.Team == 3) && match.Tick < 9000)
+        while (match.Snapshot().Units.Any(u => u.Kind == "boss") && match.Tick < 9000)
         {
             if (match.Tick % 20 == 0) match.Execute(0, new(CommandKind.Move, 58, 30));
             match.Execute(0, new(CommandKind.Ultimate));
             gold = match.Gold;
             match.Advance();
         }
-        Assert.DoesNotContain(match.Snapshot().Units, u => u.Team == 3);
+        Assert.DoesNotContain(match.Snapshot().Units, u => u.Kind == "boss");
         Assert.True(match.Gold >= gold + 150);
         Assert.InRange(match.Snapshot().Buff, 59, 60);
         Assert.Contains("Naga Basuki", match.Message);
         Advance(match, Match.BuffTicks);
         Assert.Equal(0, match.Snapshot().Buff);
         Advance(match, Match.BossRespawnTicks - Match.BuffTicks);
-        var boss = match.Snapshot().Units.Single(u => u.Team == 3);
+        var boss = match.Snapshot().Units.Single(u => u.Kind == "boss");
         Assert.Equal(900, boss.MaxHealth); // The hero may still be standing in range and strike it at once.
         Assert.InRange(boss.Health, 1, 900);
     }

@@ -33,7 +33,7 @@ public sealed class FogOfWarTests
         {
             match.Advance();
             var view = match.Snapshot(); var full = match.Snapshot(fog: false);
-            var expected = full.Units.Where(u => u.Team != 1 || full.Vision.Any(v => Distance(u.X, u.Z, v.X, v.Z) <= v.Radius
+            var expected = full.Units.Where(u => u.Team is not (1 or 3) || full.Vision.Any(v => Distance(u.X, u.Z, v.X, v.Z) <= v.Radius
                 && NavigationMap.Rts.ClearSegment(new(v.X, v.Z), new(u.X, u.Z), 0))).Select(u => u.Id);
             Assert.Equal(expected, view.Units.Select(u => u.Id));
             seen |= view.Units.Any(u => u.Team == 1);

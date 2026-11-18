@@ -34,7 +34,8 @@ public sealed class RoomRegistry
     }
 
     /// <param name="account">The signed-in account, or null for a guest. Guests are never written to match results.</param>
-    public RoomJoined Enter(string connection, string modeOrCode, string hero, bool create, string? account = null)
+    /// <param name="map">For a new room, a map id of its mode; null or empty plays the mode's default map.</param>
+    public RoomJoined Enter(string connection, string modeOrCode, string hero, bool create, string? account = null, string? map = null)
     {
         lock (gate)
         {
@@ -45,9 +46,10 @@ public sealed class RoomRegistry
             {
                 if (rooms.Count >= MaxRooms) throw new HubException("Server is full. Try again later.");
                 if (!Enum.TryParse<GameMode>(modeOrCode, out var mode) || !Enum.IsDefined(mode)) throw new HubException("Unknown mode.");
+                var definition = Maps.Resolve(mode, map) ?? throw new HubException("Unknown map.");
                 string code;
                 do { code = Convert.ToHexString(RandomNumberGenerator.GetBytes(3)); } while (rooms.ContainsKey(code));
-                room = new Room(code, new Match(mode, hero, Random.Shared.Next()));
+                room = new Room(code, new Match(mode, hero, Random.Shared.Next(), definition.Id));
                 rooms.Add(code, room);
                 owner = 0;
             }
@@ -228,7 +230,7 @@ public sealed class BattleHub(RoomRegistry rooms, IServiceProvider services) : H
     private ILobbyGrain? Lobby => services.GetService<IGrainFactory>()?.GetGrain<ILobbyGrain>(0);
     private void RequireSeatAccess() { if (Options.RequireAccount && Account is null) throw new HubException("Sign in first."); }
 
-    public RoomJoined Create(string mode, string hero) { RequireSeatAccess(); return rooms.Enter(Context.ConnectionId, mode, hero, true, Account); }
+    public RoomJoined Create(string mode, string hero, string? map) { RequireSeatAccess(); return rooms.Enter(Context.ConnectionId, mode, hero, true, Account, map); }
     public RoomJoined Join(string code, string hero) { RequireSeatAccess(); return rooms.Enter(Context.ConnectionId, code, hero, false, Account); }
     public RoomJoined Rejoin(string code, string token) => rooms.Rejoin(Context.ConnectionId, code, token);
     public RoomJoined Watch(string code) { RequireSeatAccess(); return rooms.Watch(Context.ConnectionId, code); }

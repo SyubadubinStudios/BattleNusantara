@@ -66,6 +66,21 @@ Status v0.12: authenticated clients, reconnection, single-host load results and 
 
 Status v0.13: every Phase 4 item has a shipped, tested result. What these results do **not** include is listed under "Known limits" in `Progress.md` (for example: no motion capture or facial animation, music synthesized rather than recorded, voices on a non-commercial plan). / Status v0.13: setiap butir Fase 4 memiliki hasil yang dirilis dan diuji. Hal yang tidak tercakup dicatat di bagian "Batasan" pada `Progress.md`.
 
+## Phase 4b — A living world / Dunia yang hidup (v0.14)
+
+- [x] Seven maps in three sizes (small 80, medium 100, large 140): three RTS, three MOBA and the Adventure island, chosen in the play panel and in LAN rooms; positions derive from the size. / Tujuh peta dalam tiga ukuran; posisi diturunkan dari ukuran.
+- [x] Landscapes: islands with ridged mountains, smoking volcanoes, beaches over shallow water, lakes and rivers, forest, rice fields, savanna, swamp, desert and barren land; swaying instanced nature; a village. / Lanskap pulau dengan gunung, gunung api, pantai, danau, sungai, dan berbagai bioma.
+- [x] Neutral jungle camps in four tiers with leashing, respawn and deterministic loot that matches the difficulty; permanent hero upgrades; treasures in the HUD. / Kamp monster empat tingkat dengan harta sesuai kesulitan.
+- [x] Wildlife with temperaments (timid, calm, territorial, thief), including a macaque that steals workers' gold in RTS; client-only villagers, chickens, birds, butterflies and fireflies. / Hewan liar dengan watak; penduduk dan makhluk kecil hanya di klien.
+- [x] Composed gamelan-orchestral music with a synchronized battle layer, stingers, ambience and 23 effects, rendered offline by `scripts/compose_audio.py`; positional effects. / Musik, suasana, dan efek suara digubah dan dirender sendiri.
+- [x] VFX: GPU particles, bloom, colour grade and FXAA on GPUs, loot light pillars, effects for hits, deaths, ultimates, level-ups and cleared camps. / Partikel GPU, bloom, dan efek pertempuran.
+- [x] Blender assets refined on a shared kit; environment kit, animals, creeps and villagers; a decimated character set for power saving. / Aset Blender diperhalus; set karakter ringan untuk hemat daya.
+- [x] Camera zoom, pan and hero focus. / Kamera dapat diperbesar, digeser, dan dipusatkan.
+- [x] macOS and Linux: a Photino desktop host and self-contained server downloads, built and smoke-tested on their own systems by GitHub Actions. / Unduhan macOS dan Linux.
+- [ ] Needs people: balance of camps, loot and wildlife from playtests; a listening review of the music and effects; an art review on target displays. / Memerlukan orang: keseimbangan dari playtest, penilaian musik dan efek oleh pendengar, serta tinjauan seni.
+
+Status v0.14: every item above is shipped and covered by unit or browser tests, except the last, which needs people. / Status v0.14: semua butir di atas dirilis dan diuji, kecuali butir terakhir yang memerlukan orang.
+
 ## Native acceleration / Akselerasi native
 
 Rust may be introduced for measured bottlenecks, not as a mandatory dependency. First optimize spatial queries and reduce allocations in C#. Keep a deterministic reference implementation and benchmark any C ABI replacement.

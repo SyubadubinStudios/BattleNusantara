@@ -13,12 +13,12 @@ Ini adalah anggaran yang diusulkan untuk prototipe v0.10 beserta pengukurannya. 
 | Simulation tick + snapshot, mean / Tick simulasi + snapshot, rata-rata | < 5 ms (5% of the 100 ms tick / 5% dari tick 100 ms) | `PerformanceTests` |
 | Managed allocation per tick / Alokasi per tick | < 256 KB | `PerformanceTests` |
 | Snapshot JSON size / Ukuran JSON snapshot | < 32 KB | `PerformanceTests` |
-| Units per match / Unit per pertandingan | ≤ 100 (`Match.MaxUnits`) | `PerformanceTests`, `FullMatchTests` |
+| Units per match / Unit per pertandingan | ≤ 160 (`Match.MaxUnits`, raised from 100 in v0.14 for camps, wildlife and loot / dinaikkan dari 100 di v0.14 untuk kamp, hewan, dan harta) | `PerformanceTests`, `FullMatchTests` |
 | Adventure save size / Ukuran simpanan Adventure | ≤ 12,000 characters / karakter | `PerformanceTests`, `world.js` |
 | Renderer draw calls per frame / Draw call per frame | < 400 | Browser test "renderer stays inside its draw budget" |
-| Renderer triangles per frame / Segitiga per frame | < 150,000 | Same browser test / Tes browser yang sama |
+| Renderer triangles per frame / Segitiga per frame | < 300,000 (150,000 until v0.13 / sampai v0.13) | Same browser test / Tes browser yang sama |
 
-The asserted limits are deliberately several times looser than the measurements, so the tests catch regressions rather than machine noise. / Batas yang diuji sengaja beberapa kali lebih longgar daripada hasil ukur, agar tes menangkap regresi, bukan derau mesin.
+The asserted limits are deliberately looser than the measurements, so the tests catch regressions rather than machine noise: several times looser for the simulation, and about one and a half times for the renderer since v0.14 drew whole landscapes. / Batas yang diuji sengaja lebih longgar daripada hasil ukur, agar tes menangkap regresi, bukan derau mesin: beberapa kali lipat untuk simulasi, dan sekitar satu setengah kali untuk renderer sejak v0.14 menggambar lanskap penuh.
 
 ## Measurements / Pengukuran
 
@@ -40,6 +40,10 @@ A saved Adventure after three completed quests is 2,326 characters. / Simpanan A
 Renderer, v0.13, MOBA at about 45 seconds with 23 units on screen (power-saving quality, reduced motion, 1440×1000, Edge with SwiftShader): **162 draw calls, 38,458 triangles, 115 geometries**, with every unit a Blender model. In v0.12 the same scene was 154 calls and 37,788 triangles, so the per-unit models cost almost nothing extra: each character is still two skinned primitives, and the shared template geometry is uploaded once. The smoothed frame time in that run was about 174 ms, which reflects software rendering in the test browser, not player hardware. On the development laptop with its real GPU (Intel UHD 620, high quality) the game held about 16.7 ms per frame in MOBA and Adventure; see [RENDERING.md](RENDERING.md).
 
 Renderer, v0.13, MOBA pada sekitar detik ke-45 dengan 23 unit di layar (kualitas hemat daya, kurangi animasi, 1440×1000, Edge dengan SwiftShader): **162 draw call, 38.458 segitiga, 115 geometri**, dengan setiap unit berupa model Blender. Pada v0.12 scene yang sama 154 draw call dan 37.788 segitiga, sehingga model per unit hampir tidak menambah biaya: setiap karakter tetap dua primitif ber-skin, dan geometri template diunggah sekali. Waktu frame rata-rata pada pengujian itu sekitar 174 ms; angka ini mencerminkan rendering perangkat lunak pada browser uji. Pada laptop pengembangan dengan GPU nyata (Intel UHD 620, kualitas tinggi) game bertahan sekitar 16,7 ms per frame di MOBA dan Adventure; lihat [RENDERING.md](RENDERING.md).
+
+Renderer, v0.14, the same test (MOBA, Jagat Arena, about 45 seconds, power-saving quality, reduced motion, 1440×1000, Edge with SwiftShader): **182 draw calls, 168,134 triangles**, 38 units of which 16 are camp creeps and animals, at about 315 ms a frame. The scene now holds the whole island: terrain, the sea, scattered nature (100 objects at this quality), the village and its five villagers and chickens. Characters on power saving come from `characters-lod.glb` (about 1,270 triangles each instead of 3,700); without it the same scene drew about 262,000 triangles. The triangle budget was raised from 150,000 to 300,000 for this reason. On the development laptop's GPU the same quality held 60 Hz with 181,000 triangles, and high quality with bloom held 60 Hz at 600,000 triangles; see [RENDERING.md](RENDERING.md).
+
+Renderer, v0.14, tes yang sama (MOBA, Arena Jagat, sekitar detik ke-45, kualitas hemat daya, kurangi animasi, 1440×1000, Edge dengan SwiftShader): **182 draw call, 168.134 segitiga**, 38 unit termasuk 16 monster kamp dan hewan, sekitar 315 ms per frame. Adegan kini memuat seluruh pulau. Karakter pada hemat daya berasal dari `characters-lod.glb` (sekitar 1.270 segitiga per karakter, bukan 3.700); tanpanya adegan yang sama menggambar sekitar 262.000 segitiga. Karena itu anggaran segitiga dinaikkan dari 150.000 menjadi 300.000. Pada GPU laptop pengembangan, kualitas yang sama bertahan 60 Hz dengan 181.000 segitiga, dan kualitas tinggi dengan bloom bertahan 60 Hz pada 600.000 segitiga.
 
 ## What the numbers say / Arti angka-angka ini
 

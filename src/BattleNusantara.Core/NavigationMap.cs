@@ -1,7 +1,12 @@
 namespace BattleNusantara.Core;
 
 public readonly record struct MapPoint(double X, double Z);
-public sealed record ObstacleView(double X, double Z, double Width, double Depth);
+/// <summary>An axis-aligned obstacle. Kind tells the client how to draw it and the simulation whether it blocks sight:
+/// ruin, rock, grove, wall and door block both walking and sight; water blocks walking only.</summary>
+public sealed record ObstacleView(double X, double Z, double Width, double Depth, string Kind = "ruin")
+{
+    public bool BlocksSight => Kind != "water";
+}
 
 /// <summary>Immutable deterministic visibility graph around axis-aligned obstacles; rebuild when buildings change.</summary>
 public sealed class NavigationMap
@@ -12,15 +17,18 @@ public sealed class NavigationMap
         new(44, 40, 12, 8), new(62, 60, 10, 12), new(28, 62, 8, 10)
     ]);
     // Adventure: the Mystic Cave in the north-east corner. Its door is an obstacle until the guardians fall.
-    private static readonly ObstacleView[] CaveWalls = [new(68, 17, 2, 26), new(74, 30, 12, 2), new(92, 30, 8, 2)];
+    private static readonly ObstacleView[] CaveWalls = [new(68, 17, 2, 26, "wall"), new(74, 30, 12, 2, "wall"), new(92, 30, 8, 2, "wall")];
     public static readonly NavigationMap AdventureOpen = new(CaveWalls);
-    public static readonly NavigationMap AdventureClosed = new(CaveWalls.Append(new(84, 30, 8, 2)));
+    public static readonly NavigationMap AdventureClosed = new(CaveWalls.Append(new(84, 30, 8, 2, "door")));
     private readonly ObstacleView[] obstacles;
     private readonly MapPoint[] corners;
     public IReadOnlyList<ObstacleView> Obstacles { get; }
+    /// <summary>Side of the square arena; walkable ground runs from 4 to Size - 4.</summary>
+    public double Size { get; }
 
-    public NavigationMap(IEnumerable<ObstacleView> obstacles)
+    public NavigationMap(IEnumerable<ObstacleView> obstacles, double size = 100)
     {
+        Size = size;
         this.obstacles = obstacles.ToArray();
         Obstacles = Array.AsReadOnly(this.obstacles);
         corners = this.obstacles.SelectMany(o =>
@@ -32,7 +40,7 @@ public sealed class NavigationMap
     }
 
     public bool IsWalkable(MapPoint point) => double.IsFinite(point.X) && double.IsFinite(point.Z)
-        && point.X >= 4 && point.X <= 96 && point.Z >= 4 && point.Z <= 96
+        && point.X >= 4 && point.X <= Size - 4 && point.Z >= 4 && point.Z <= Size - 4
         && !obstacles.Any(o => Math.Abs(point.X - o.X) <= o.Width / 2 + Clearance && Math.Abs(point.Z - o.Z) <= o.Depth / 2 + Clearance);
 
     public bool ClearSegment(MapPoint from, MapPoint to, double padding = Clearance)

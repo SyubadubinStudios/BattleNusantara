@@ -106,7 +106,7 @@ Rooms and queue tickets are held in memory and are lost when the server restarts
 `GET /health` mengembalikan versi. `GET /api/status` mengembalikan jumlah dan waktu tick, tanpa data yang mengidentifikasi pemain:
 
 ```json
-{ "version": "0.13.0", "rooms": 2, "players": 3, "spectators": 0, "queued": 1, "ticks": 5321, "overruns": 0, "meanTickMs": 0.41, "worstTickMs": 6.2 }
+{ "version": "0.14.0", "rooms": 2, "players": 3, "spectators": 0, "queued": 1, "ticks": 5321, "overruns": 0, "meanTickMs": 0.41, "worstTickMs": 6.2 }
 ```
 
 `overruns` counts ticks whose simulation and snapshot delivery took longer than 100 ms. A rising number means the host is overloaded. There is no dashboard, alerting or log shipping yet. / `overruns` menghitung tick yang simulasi dan pengiriman snapshot-nya melebihi 100 ms. Angka yang terus naik berarti host kelebihan beban. Belum ada dashboard, peringatan, atau pengiriman log.

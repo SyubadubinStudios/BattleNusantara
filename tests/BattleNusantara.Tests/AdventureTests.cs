@@ -208,7 +208,9 @@ public sealed class AdventureTests
         Assert.Null(Match.Load("{}"));
         Assert.Null(Match.Load("[1,2,3]"));
         Assert.Null(Match.Load(new string(' ', Match.MaxSaveLength + 1)));
-        Assert.Null(Match.Load(json.Replace("\"Version\":2", "\"Version\":3")));
+        Assert.Null(Match.Load(json.Replace("\"Version\":3", "\"Version\":4")));
+        Assert.Null(Match.Load(json.Replace("\"Model\":\"tuyul\"", "\"Model\":\"gundala\"")));
+        Assert.Null(Match.Load(json.Replace("\"Kind\":\"creep\"", "\"Kind\":\"guardian\"")));
         Assert.Null(Match.Load(json.Replace("\"Model\":\"captain\"", "\"Model\":\"gundala\"")));
         Assert.Null(Match.Load(json.Replace("\"SideStarted\":false", "\"SideStarted\":false,\"SideDone\":true").Replace("\"SideDone\":false", "\"Spare\":0")));
         Assert.Null(Match.Load(json.Replace("\"Hero\":\"gajah-mada\"", "\"Hero\":\"nobody\"")));

@@ -29,7 +29,8 @@
             <div class="objective"><span class="eyebrow">@T("MISI AKTIF", "ACTIVE MISSION")</span><h2>@(state.Mode == GameMode.Adventure ? T("Pulihkan tiga prasasti", "Recover three inscriptions") : T("Pertahankan Jagat Nusantara", "Defend Jagat Nusantara"))</h2><p>@(state.Mode == GameMode.Adventure ? T("Kumpulkan prasasti, lalu kalahkan Sang Kalatidha.", "Collect inscriptions, then defeat Sang Kalatidha.") : (state.Mode == GameMode.Moba ? T("Runtuhkan satu menara untuk membuka gerbang musuh. Pulihkan HP di candi sendiri.", "Topple a tower to expose the enemy gate. Heal beside your shrine.") : T("Hancurkan gerbang musuh. Pulihkan HP di candi sendiri.", "Destroy the enemy gate. Heal beside your shrine.")))</p></div>
             <div class="resources"><span>◈ <b>@state.Gold</b> @T("Emas", "Gold")</span>@if (state.Mode == GameMode.Rts) { <span>⚑ <b>@state.Supplies</b> @T("Suplai", "Supply")</span> } @if (state.Mode == GameMode.Adventure) { <span>✧ <b>@state.Relics / 3</b> @T("Prasasti", "Inscriptions")</span> } @if (state.Mode == GameMode.Moba) { <span class="tower-count">♜ <b>@state.Units.Count(u => u.Kind == "tower" && u.Team == 0) – @state.Units.Count(u => u.Kind == "tower" && u.Team == 1)</b> @T("Menara", "Towers")</span> @if (state.Buff > 0) { <span class="blessing">✦ @T("Restu", "Blessing") <b>@Math.Ceiling(state.Buff)s</b></span> } @if (state.EnemyBuff > 0) { <span class="enemy-blessing">✦ @T("Restu musuh", "Enemy blessing") <b>@Math.Ceiling(state.EnemyBuff)s</b></span> } }<span>◇ @T("Level", "Level") @state.Level</span></div>
         </div>
-        <div class="battle-help">@(Client.Spectating ? T("Mode penonton: kamu melihat apa yang dilihat tim dan tidak dapat memberi perintah.", "Spectator mode: you see what the team sees and cannot give orders.") : T("Klik arena untuk bergerak • Serang otomatis • Q Ultimate • W Tameng • Esc Jeda", "Click arena to move • Auto attack • Q Ultimate • W Guard • Esc Pause"))</div>
+        <div class="battle-help">@(Client.Spectating ? T("Mode penonton: kamu melihat apa yang dilihat tim dan tidak dapat memberi perintah.", "Spectator mode: you see what the team sees and cannot give orders.") : T("Klik arena untuk bergerak • Serang otomatis • Q Ultimate • W Tameng • Esc Jeda • Roda tetikus zoom • Panah geser • F fokus hero", "Click arena to move • Auto attack • Q Ultimate • W Guard • Esc Pause • Wheel zoom • Arrows pan • F focus hero"))</div>
+        @if (Toast is { } toast) { <div class="match-toast" aria-live="polite" data-message="@toast">@toast</div> }
         @if (state.Quests is { } quests)
         {
             <aside class="quest-log" aria-label="@T("Catatan misi", "Quest log")">
@@ -86,20 +87,21 @@
                         <button disabled="@(selection.Count == 0)" title="Ctrl+@groupSlot / Alt+@groupSlot" aria-label="@T("Simpan grup", "Save group") @groupSlot" @onclick="() => ControlGroup(groupSlot, true)">+</button></div>
                     }
                 </div>
-                <svg class="tactical-map" data-tactical-map="true" viewBox="0 0 100 100" role="img" aria-label="@T("Peta taktis; klik untuk memberi tujuan", "Tactical map; click to issue a destination")">
-                    <path d="M13 13L87 87 M13 13L18 87L87 87 M13 13L87 18L87 87" class="map-lanes" />
+                <svg class="tactical-map" data-tactical-map="true" data-size="@MapSize" viewBox="0 0 @MapSize @MapSize" role="img" aria-label="@T("Peta taktis; klik untuk memberi tujuan", "Tactical map; click to issue a destination")">
+                    <path d="@LanePath" class="map-lanes" />
+                    @foreach (var camp in CurrentMap.Camps) { <circle class="map-camp" data-camp="@camp.Id" data-tier="@camp.Tier" cx="@camp.X" cy="@camp.Z" r="@(2 + (int)camp.Tier * .6)" /> }
                     @foreach (var obstacle in state.Obstacles) { <rect x="@(obstacle.X - obstacle.Width / 2)" y="@(obstacle.Z - obstacle.Depth / 2)" width="@obstacle.Width" height="@obstacle.Depth" class="map-obstacle" /> }
                     @if (state.Vision.Length > 0)
                     {
-                        <mask id="fog-mask"><rect width="100" height="100" fill="#fff" />@foreach (var source in state.Vision) { <circle cx="@source.X" cy="@source.Z" r="@source.Radius" fill="#000" /> }</mask>
-                        <rect class="map-fog" width="100" height="100" mask="url(#fog-mask)" />
+                        <mask id="fog-mask"><rect width="@MapSize" height="@MapSize" fill="#fff" />@foreach (var source in state.Vision) { <circle cx="@source.X" cy="@source.Z" r="@source.Radius" fill="#000" /> }</mask>
+                        <rect class="map-fog" width="@MapSize" height="@MapSize" mask="url(#fog-mask)" />
                     }
-                    <rect x="9" y="9" width="8" height="8" fill="#83c9ba" /><rect x="83" y="83" width="8" height="8" fill="#d17791" />
+                    <rect x="@(CurrentLayout.AllyBase - 4)" y="@(CurrentLayout.AllyBase - 4)" width="8" height="8" fill="#83c9ba" /><rect x="@(CurrentLayout.EnemyBase - 4)" y="@(CurrentLayout.EnemyBase - 4)" width="8" height="8" fill="#d17791" />
                     @foreach (var resource in state.Resources) { <circle data-resource-id="@resource.Id" cx="@resource.X" cy="@resource.Z" r="3" fill="@(resource.Remaining > 0 ? "#e9c368" : "#59676b")" /> }
                     @foreach (var post in state.Units.Where(u => u.Kind == "outpost")) { <rect x="@(post.X - 3)" y="@(post.Z - 3)" width="6" height="6" fill="@(post.Construction < 100 ? "#d4b478" : "#83c9ba")" /> }
                     @foreach (var unit in state.Units.Where(u => u.Kind != "outpost")) { <circle data-unit-id="@unit.Id" cx="@unit.X" cy="@unit.Z" r="@(selection.Contains(unit.Id) ? 2.5 : 1.6)" fill="@unit.Color" stroke="@(selection.Contains(unit.Id) ? "#ffffff" : "none")" stroke-width=".7" /> }
                 </svg>
-                <p class="order-feedback" role="status">@(commandFeedback ?? (buildMode ? T("Klik lokasi pos di tanah terbuka, dalam 55 langkah dari candi. Esc membatalkan.", "Click open ground within 55 units of your shrine to place an outpost. Esc cancels.") : attackMove ? T("Pilih tujuan serangan di arena atau peta.", "Choose an attack destination on the arena or map.") : T("Klik atau seret kotak untuk memilih; Shift menambah. Klik tanah atau peta untuk bergerak.", "Click or drag a box to select; Shift adds. Click ground or map to move.")))</p>
+                <p class="order-feedback" role="status">@(commandFeedback ?? (buildMode ? T($"Klik lokasi pos di tanah terbuka, dalam {CurrentLayout.OutpostReach:0} langkah dari candi. Esc membatalkan.", $"Click open ground within {CurrentLayout.OutpostReach:0} units of your shrine to place an outpost. Esc cancels.") : attackMove ? T("Pilih tujuan serangan di arena atau peta.", "Choose an attack destination on the arena or map.") : T("Klik atau seret kotak untuk memilih; Shift menambah. Klik tanah atau peta untuk bergerak.", "Click or drag a box to select; Shift adds. Click ground or map to move.")))</p>
             </aside>
             <aside class="economy-panel" aria-label="@T("Ekonomi RTS", "RTS economy")">
                 <span class="eyebrow">@T("JALUR PERBEKALAN", "SUPPLY ROUTES")</span>
@@ -136,7 +138,17 @@
             }
             else
             {
-            <section class="hero-hud"><div class="hero-seal" style="--hero-color:@SelectedHero.Color"><img src="_content/BattleNusantara.UI/portraits/@(SelectedHero.Id).webp" alt="" /></div><div><span class="eyebrow">@SelectedHero.Role</span><h3>@SelectedHero.Name</h3><progress max="@(Player?.MaxHealth ?? 1)" value="@(Player?.Health ?? 0)"></progress><small class="hero-health">@(state.Respawn > 0 ? T($"Bangkit dalam {Math.Ceiling(state.Respawn)} dtk", $"Respawning in {Math.Ceiling(state.Respawn)}s") : $"{Math.Ceiling(Player?.Health ?? 0)} / {Player?.MaxHealth ?? 0} HP")</small>@if (state.Mode == GameMode.Moba) { <progress class="xp" max="100" value="@((int)(state.Experience * 100))" aria-label="@T("Pengalaman hero", "Hero experience")"></progress> }</div></section>
+            <section class="hero-hud"><div class="hero-seal" style="--hero-color:@SelectedHero.Color"><img src="_content/BattleNusantara.UI/portraits/@(SelectedHero.Id).webp" alt="" /></div><div><span class="eyebrow">@SelectedHero.Role</span><h3>@SelectedHero.Name</h3><progress max="@(Player?.MaxHealth ?? 1)" value="@(Player?.Health ?? 0)"></progress><small class="hero-health">@(state.Respawn > 0 ? T($"Bangkit dalam {Math.Ceiling(state.Respawn)} dtk", $"Respawning in {Math.Ceiling(state.Respawn)}s") : $"{Math.Ceiling(Player?.Health ?? 0)} / {Player?.MaxHealth ?? 0} HP")</small>@if (state.Mode == GameMode.Moba) { <progress class="xp" max="100" value="@((int)(state.Experience * 100))" aria-label="@T("Pengalaman hero", "Hero experience")"></progress> }
+                @if (state.Treasures is { Length: > 0 } found)
+                {
+                    <ul class="treasures" aria-label="@T("Harta temuan", "Treasures found")">
+                        @foreach (var group in found.GroupBy(t => t))
+                        {
+                            if (Catalog.LootItem(group.Key) is not { } item) continue;
+                            <li data-loot="@item.Id" data-rarity="@item.Rarity" title="@LootSummary(item)"><span>@LootGlyph(item.Rarity)</span>@T(item.Name, item.NameEn)@(group.Count() > 1 ? $" ×{group.Count()}" : "")</li>
+                        }
+                    </ul>
+                }</div></section>
             <div class="abilities">
                 <button class="ability" @onclick="Ultimate" disabled="@(state.UltimateCooldown > 0 || Player is null)"><kbd>Q</kbd><span>✧</span><b>@(state.UltimateCooldown > 0 ? $"{Math.Ceiling(state.UltimateCooldown)}s" : SelectedHero.Skill)</b></button>
                 <button class="ability" data-ability="guard" @onclick="Guard" disabled="@(state.GuardCooldown > 0 || Player is null)"><kbd>W</kbd><span>⛨</span><b>@(state.GuardCooldown > 0 ? $"{Math.Ceiling(state.GuardCooldown)}s" : T("Tameng", "Guard"))</b></button>
@@ -165,7 +177,7 @@
     }
     else if (page == "home")
     {
-        <main class="home-content"><div class="eyebrow"><i></i> @T("SEBUAH LEGENDA. DUNIA YANG BARU.", "AN ANCIENT LEGEND. A WORLD REBORN.")</div><h1>@T("Warisan abadi.", "An enduring legacy.")<br /><em>@T("Pertempuran", "A battle")</em><br />@T("tanpa batas.", "beyond time.")</h1><p>@T("Ketika masa depan bertemu legenda, siapa yang akan menjaga Nusantara? Pimpin para pahlawan melintasi gerbang waktu.", "When the future meets legend, who will protect Nusantara? Lead your heroes through the gates of time.")</p><button class="primary" @onclick='() => OpenPanel("play")'>@T("MULAI PETUALANGAN", "BEGIN YOUR ADVENTURE") <span>↗</span></button><button class="story-link" @onclick='() => page = "story"'><span>▷</span> @T("Jelajahi kisahnya", "Explore the story")</button><div class="edition">PROLOGUE <span> / </span> THE QUANTUM AWAKENING <small>PLAYABLE PROTOTYPE · v0.13</small></div></main>
+        <main class="home-content"><div class="eyebrow"><i></i> @T("SEBUAH LEGENDA. DUNIA YANG BARU.", "AN ANCIENT LEGEND. A WORLD REBORN.")</div><h1>@T("Warisan abadi.", "An enduring legacy.")<br /><em>@T("Pertempuran", "A battle")</em><br />@T("tanpa batas.", "beyond time.")</h1><p>@T("Ketika masa depan bertemu legenda, siapa yang akan menjaga Nusantara? Pimpin para pahlawan melintasi gerbang waktu.", "When the future meets legend, who will protect Nusantara? Lead your heroes through the gates of time.")</p><button class="primary" @onclick='() => OpenPanel("play")'>@T("MULAI PETUALANGAN", "BEGIN YOUR ADVENTURE") <span>↗</span></button><button class="story-link" @onclick='() => page = "story"'><span>▷</span> @T("Jelajahi kisahnya", "Explore the story")</button><div class="edition">PROLOGUE <span> / </span> THE QUANTUM AWAKENING <small>PLAYABLE PROTOTYPE · v0.14</small></div></main>
         <aside class="location-label"><span>JAWA TENGAH · 2125</span><h2>Borobudur Quantum</h2><p>@T("Di sini, seluruh zaman bertemu.", "Where every era converges.")</p><div class="coordinate">7°36′28″S &nbsp; 110°12′13″E</div></aside>
         <div class="mode-strip">@foreach (var item in Enum.GetValues<GameMode>()) { <button @onclick="() => ChooseMode(item)"><span class="mode-icon">@(item == GameMode.Rts ? "⚑" : item == GameMode.Moba ? "⚔" : "◇")</span><span><strong>@ModeName(item)</strong><small>@ModeDescription(item)</small></span><span class="mode-arrow">↗</span></button> }</div>
     }
@@ -188,6 +200,8 @@
             {
                 <h2>@T("Satu gerbang. Tiga takdir.", "One gate. Three destinies.")</h2><div class="mode-tabs">@foreach (var item in Enum.GetValues<GameMode>()) { <button class="@(mode == item ? "selected" : "")" @onclick="() => mode = item">@ModeName(item)</button> }</div><p>@ModeDescription(mode)</p>
                 <label for="hero">@T("Pahlawan", "Hero")</label><select id="hero" @bind="heroId">@foreach (var hero in Catalog.Heroes) { <option value="@hero.Id">@hero.Name · @hero.Role</option> }</select>
+                <label for="map">@T("Peta", "Map")</label><select id="map" value="@SelectedMap.Id" @onchange="ChooseMap">@foreach (var item in Maps.For(mode)) { <option value="@item.Id">@T(item.Name, item.NameEn) · @T(item.SizeName, item.SizeNameEn) (@item.Size)</option> }</select>
+                <p class="map-note" data-map="@SelectedMap.Id">@T(SelectedMap.Description, SelectedMap.DescriptionEn) <span>@T($"{SelectedMap.Camps.Length} kamp monster", $"{SelectedMap.Camps.Length} creep camps")</span></p>
                 <div class="mission-note">@T("Klik tanah untuk bergerak. Hero menyerang musuh terdekat secara otomatis. Gunakan Q untuk ultimate; kembali ke candi untuk memulihkan HP.", "Click the ground to move. Your hero attacks nearby enemies automatically. Press Q for your ultimate; return to the shrine to heal.")</div>
                 <button class="primary wide" disabled="@busy" @onclick="StartLocal">@T("MAIN SOLO", "PLAY SOLO") ↗</button>
                 @if (savedGame is not null) { <button class="secondary wide" disabled="@busy" @onclick="ContinueSaved">@T("Lanjutkan simpanan Adventure", "Continue saved Adventure")</button> }
@@ -222,7 +236,7 @@
             }
             else if (panel == "options")
             {
-                <h2>@T("Atur perjalananmu.", "Make it your journey.")</h2><label for="language">@T("Bahasa", "Language")</label><select id="language" @bind="settings.Language" @bind:after="SaveSettings"><option value="id">Bahasa Indonesia</option><option value="en">English</option></select><label for="quality">@T("Kualitas grafis", "Graphics quality")</label><select id="quality" @bind="settings.Quality" @bind:after="SaveSettings"><option value="high">@T("Tinggi", "High")</option><option value="low">@T("Hemat daya", "Power saving")</option></select><label class="check"><input type="checkbox" @bind="settings.ReducedMotion" @bind:after="SaveSettings" /> @T("Kurangi animasi", "Reduce motion")</label><label class="check"><input type="checkbox" id="cinematics" @bind="settings.Cinematics" @bind:after="SaveSettings" /> @T("Sinematik pembuka", "Opening cinematic")</label><label class="check"><input type="checkbox" id="voices" @bind="settings.Voices" @bind:after="SaveSettings" /> @T("Suara dialog", "Dialogue voices")</label><label for="volume">@T("Volume ambience", "Ambient volume") · @settings.Volume%</label><input id="volume" type="range" min="0" max="100" @bind="settings.Volume" @bind:after="SaveSettings" /><p>@T("Pengaturan disimpan pada perangkat ini.", "Settings are saved on this device.")</p>
+                <h2>@T("Atur perjalananmu.", "Make it your journey.")</h2><label for="language">@T("Bahasa", "Language")</label><select id="language" @bind="settings.Language" @bind:after="SaveSettings"><option value="id">Bahasa Indonesia</option><option value="en">English</option></select><label for="quality">@T("Kualitas grafis", "Graphics quality")</label><select id="quality" @bind="settings.Quality" @bind:after="SaveSettings"><option value="high">@T("Tinggi", "High")</option><option value="low">@T("Hemat daya", "Power saving")</option></select><label class="check"><input type="checkbox" @bind="settings.ReducedMotion" @bind:after="SaveSettings" /> @T("Kurangi animasi", "Reduce motion")</label><label class="check"><input type="checkbox" id="cinematics" @bind="settings.Cinematics" @bind:after="SaveSettings" /> @T("Sinematik pembuka", "Opening cinematic")</label><label class="check"><input type="checkbox" id="voices" @bind="settings.Voices" @bind:after="SaveSettings" /> @T("Suara dialog", "Dialogue voices")</label><label for="volume">@T("Volume suara", "Sound volume") · @settings.Volume%</label><input id="volume" type="range" min="0" max="100" @bind="settings.Volume" @bind:after="SaveSettings" /><p>@T("Pengaturan disimpan pada perangkat ini.", "Settings are saved on this device.")</p>
                 @if (Client.View is not null) { <button class="secondary wide" @onclick="Home">@T("Akhiri permainan dan kembali", "End game and return home")</button> }
             }
             else if (panel == "pause")
@@ -234,7 +248,7 @@
             }
             else if (panel == "credits")
             {
-                <h2>@T("Di balik legenda.", "Behind the legend.")</h2><div class="credits-window" tabindex="0"><div class="credits-roll"><span>CREATED BY</span><h2>Ariana Mischa Fadhila</h2><p>Syubadubin Studios</p><span>WORLD &amp; VISION</span><h2>Battle of Nusantara</h2><p>@T("Terinspirasi sejarah, budaya, dan mitologi Indonesia.", "Inspired by Indonesian history, culture, and mythology.")</p><span>TECHNOLOGY</span><p>.NET 10 · Blazor Hybrid · WPF<br />Three.js · ASP.NET Core · SignalR</p><span>ART PIPELINE</span><p>@T("Candi, 24 karakter, naga, dan properti asli", "Original shrine, 24 characters, naga and props") · Blender MCP<br />@T("Potret hero", "Hero portraits") · GPT Image (Rodin MCP)</p><span>VOICES</span><p>@T("Suara dialog", "Dialogue voices") · ElevenLabs</p><span>MUSIC</span><p>@T("Gamelan sintesis, digubah untuk game ini", "Synthesized gamelan, composed for this game")</p><h2>@T("Untuk Nusantara.", "For Nusantara.")</h2><p>Dibuat oleh Ariana Mischa Fadhila<br />dari Syubadubin Studios</p></div></div><small>@T("Arahkan pointer atau fokus untuk menghentikan guliran.", "Hover or focus to pause scrolling.")</small>
+                <h2>@T("Di balik legenda.", "Behind the legend.")</h2><div class="credits-window" tabindex="0"><div class="credits-roll"><span>CREATED BY</span><h2>Ariana Mischa Fadhila</h2><p>Syubadubin Studios</p><span>WORLD &amp; VISION</span><h2>Battle of Nusantara</h2><p>@T("Terinspirasi sejarah, budaya, dan mitologi Indonesia.", "Inspired by Indonesian history, culture, and mythology.")</p><span>TECHNOLOGY</span><p>.NET 10 · Blazor Hybrid · WPF<br />Three.js · ASP.NET Core · SignalR</p><span>ART PIPELINE</span><p>@T("Candi, 34 karakter, hewan, naga, lanskap, dan properti asli", "Original shrine, 34 characters, animals, naga, landscapes and props") · Blender MCP<br />@T("Potret hero", "Hero portraits") · GPT Image (Rodin MCP)</p><span>VOICES</span><p>@T("Suara dialog", "Dialogue voices") · ElevenLabs</p><span>MUSIC &amp; SOUND</span><p>@T("Musik gamelan-orkestra, suasana, dan efek suara sintesis, digubah untuk game ini", "Gamelan-orchestral music, ambience and sound effects, synthesized and composed for this game")</p><h2>@T("Untuk Nusantara.", "For Nusantara.")</h2><p>Dibuat oleh Ariana Mischa Fadhila<br />dari Syubadubin Studios</p></div></div><small>@T("Arahkan pointer atau fokus untuk menghentikan guliran.", "Hover or focus to pause scrolling.")</small>
             }
             @if (error is not null) { <p class="error" role="alert">@error</p> }
         </section></div>
@@ -327,6 +341,31 @@
         }
     }
     private int refreshPending;
+    private string? shownMap, lastMessage;
+    private long messageTick;
+    // The latest message of the match, in the chosen language, for four seconds after it appears.
+    private string? Toast
+    {
+        get
+        {
+            if (Client.View is not { } view || string.IsNullOrEmpty(view.Message)) return null;
+            if (view.Message != lastMessage) { lastMessage = view.Message; messageTick = view.Tick; }
+            if (view.Tick - messageTick > 40 || view.Tick < messageTick) return null;
+            var parts = view.Message.Split(" / ", 2);
+            return settings.Language == "en" && parts.Length > 1 ? parts[1] : parts[0];
+        }
+    }
+    private static string LootGlyph(LootRarity rarity) => rarity switch { LootRarity.Minor => "✿", LootRarity.Major => "✦", LootRarity.Legendary => "✹", _ => "◈" };
+    private string LootSummary(LootDefinition item)
+    {
+        var parts = new List<string>();
+        if (item.Damage > 0) parts.Add($"+{item.Damage} ATK");
+        if (item.Health > 0) parts.Add($"+{item.Health} HP");
+        if (item.Speed > 0) parts.Add(T($"+{item.Speed * 100:0}% kecepatan", $"+{item.Speed * 100:0}% speed"));
+        if (item.Heal > 0) parts.Add(T($"pulih {item.Heal * 100:0}%", $"heals {item.Heal * 100:0}%"));
+        if (item.Gold > 0) parts.Add($"+{item.Gold} ◈");
+        return string.Join(" · ", parts);
+    }
     private HeroDefinition SelectedHero => Catalog.Hero(heroId);
     private UnitView? Player => Client.View?.Units.FirstOrDefault(u => u.Kind == "hero" && u.Owner == Client.Owner);
     private NpcAnswer? npcAnswer;
@@ -369,6 +408,20 @@
         npcBusy = true; StateHasChanged();
         try { npcAnswer = await Client.TalkToNpc(serverUrl, npc.Id, npcQuestion, settings.Language) ?? npcAnswer; npcQuestion = ""; }
         finally { npcBusy = false; StateHasChanged(); }
+    }
+    // The map of the match on screen; snapshots carry its id and size.
+    private MapDefinition CurrentMap => Maps.Find(Client.View?.Map) ?? Maps.Default(Client.View?.Mode ?? mode);
+    private MapLayout CurrentLayout => new(CurrentMap.Size);
+    private string MapSize => CurrentMap.Size.ToString(System.Globalization.CultureInfo.InvariantCulture);
+    private string LanePath
+    {
+        get
+        {
+            var l = CurrentLayout; var a = l.AllyBase; var e = l.EnemyBase;
+            string P(double x, double z) => $"{x.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)} {z.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)}";
+            var (tx, tz) = l.Lane(0); var (bx, bz) = l.Lane(2);
+            return $"M{P(a, a)}L{P(e, e)} M{P(a, a)}L{P(tx, tz)}L{P(e, e)} M{P(a, a)}L{P(bx, bz)}L{P(e, e)}";
+        }
     }
     private Sky CurrentSky => Atmosphere.At(Client.View?.Tick ?? 0);
     private string SkyLabel => (CurrentSky.Weather switch { "mist" => T("🌫 Kabut", "🌫 Mist"), "rain" => T("🌧 Hujan", "🌧 Rain"), "storm" => T("⛈ Badai", "⛈ Storm"), _ => T("☀ Cerah", "☀ Clear") })
@@ -418,6 +471,11 @@
                 selection.IntersectWith(Client.View?.Units.Where(u => u.Owner == Client.Owner).Select(u => u.Id) ?? []);
                 groups.Prune(Client.View, Client.Owner);
                 if (selection.Count == 0 && Player is { } hero) selection.Add(hero.Id);
+                if (renderer is not null && (Client.View?.Map ?? "") != shownMap)
+                {
+                    shownMap = Client.View?.Map ?? "";
+                    await renderer.InvokeVoidAsync("setMap", Maps.Find(Client.View?.Map));
+                }
                 if (renderer is not null) await renderer.InvokeVoidAsync("update", Client.View, Client.Owner, selection.ToArray(), attackMove, buildMode, Client.View is null ? null : CurrentSky);
                 StateHasChanged();
             });
@@ -430,7 +488,11 @@
     private void ClosePanel() { panel = null; error = null; Client.Paused = false; }
     private void ChooseMode(GameMode selected) { mode = selected; OpenPanel("play"); }
     private void ResetOrders() { selection.Clear(); groups.Clear(); attackMove = buildMode = false; commandFeedback = null; }
-    private async Task StartLocal() { ResetOrders(); await Client.StartLocal(mode, heroId); ClosePanel(); await Refresh(); }
+    private async Task StartLocal() { ResetOrders(); await Client.StartLocal(mode, heroId, SelectedMap.Id); ClosePanel(); await Refresh(); }
+    private string? mapId;
+    // The chosen map when it belongs to the selected mode, otherwise the mode's default.
+    private MapDefinition SelectedMap => Maps.Resolve(mode, mapId) ?? Maps.Default(mode);
+    private void ChooseMap(ChangeEventArgs change) => mapId = change.Value?.ToString();
     private async Task Home() { await Client.Leave(); ResetOrders(); ClosePanel(); page = "home"; await Refresh(); }
     private async Task SaveGame()
     {
@@ -458,7 +520,7 @@
     private async Task Connect(bool watch)
     {
         busy = true; error = null;
-        try { ResetOrders(); await Client.Connect(serverUrl, roomCode, mode, heroId, watch); ClosePanel(); await Refresh(); }
+        try { ResetOrders(); await Client.Connect(serverUrl, roomCode, mode, heroId, watch, SelectedMap.Id); ClosePanel(); await Refresh(); }
         catch (Exception ex) when (ex is not OperationCanceledException) { Console.Error.WriteLine(ex); error = watch ? T("Tidak dapat menonton. Periksa alamat server dan kode ruang.", "Could not watch. Check the server address and room code.") : T("Tidak dapat bergabung. Periksa alamat server, kode ruang, dan kapasitas ruang.", "Could not join. Check the server address, room code, and room capacity."); }
         finally { busy = false; }
     }
@@ -569,7 +631,7 @@
         public string Language { get; set; } = "id";
         public string Quality { get; set; } = "high";
         public bool ReducedMotion { get; set; }
-        public int Volume { get; set; } = 20;
+        public int Volume { get; set; } = 50;
         public bool Cinematics { get; set; } = true;
         public bool Voices { get; set; } = true;
     }

@@ -14,9 +14,16 @@ Unduh `BattleNusantara-<versi>-win-x64-setup.exe` dari halaman [Releases](https:
 
 Download `BattleNusantara-<version>-win-x64-setup.exe` from [Releases](https://github.com/SyubadubinStudios/BattleNusantara/releases) and run it. It installs the game for the current user (no administrator rights) and, if chosen, the LAN server. It needs Windows 10 (19041) or later and the Microsoft Edge WebView2 Runtime, which Windows 11 already has. The installer is not code-signed, so Windows SmartScreen may warn.
 
+**Linux dan macOS (v0.14).** Unduh `BattleNusantara-<versi>-linux-x64.tar.gz`, `-osx-arm64.zip` (Apple silicon) atau `-osx-x64.zip` (Intel). Linux: ekstrak lalu jalankan `./play.sh`; perlu WebKitGTK 4.1, GTK 3 dan libnotify (`sudo apt install libwebkit2gtk-4.1-0 libgtk-3-0 libnotify4`). macOS 12+: buka `Battle of Nusantara.app`; aplikasi ditandatangani ad hoc tetapi belum dinotarisasi, jadi pertama kali klik kanan lalu pilih **Open** (atau `xattr -dr com.apple.quarantine "Battle of Nusantara.app"`). Setiap paket juga berisi server LAN (`lan-server.sh` / `LAN Server/lan-server.command`), yang dapat dimainkan dari browser apa pun di `http://<komputer>:5080`.
+
+**Linux and macOS (v0.14).** Download `BattleNusantara-<version>-linux-x64.tar.gz`, `-osx-arm64.zip` (Apple silicon) or `-osx-x64.zip` (Intel). Linux: extract and run `./play.sh`; it needs WebKitGTK 4.1, GTK 3 and libnotify (`sudo apt install libwebkit2gtk-4.1-0 libgtk-3-0 libnotify4`). macOS 12+: open `Battle of Nusantara.app`; it is signed ad hoc but not notarized, so the first time right-click it and choose **Open** (or `xattr -dr com.apple.quarantine "Battle of Nusantara.app"`). Each download also holds the LAN server (`lan-server.sh` / `LAN Server/lan-server.command`), playable from any browser at `http://<computer>:5080`. The desktop game there is a Photino window (the system WebKit) around the same game as on Windows.
+
 ```powershell
-./scripts/package.ps1   # builds artifacts/installer/BattleNusantara-<version>-win-x64-setup.exe (needs Inno Setup 6)
+./scripts/package.ps1          # artifacts/installer/BattleNusantara-<version>-win-x64-setup.exe (needs Inno Setup 6)
+python scripts/package_unix.py # artifacts/installer/*-linux-x64.tar.gz, *-osx-arm64.zip, *-osx-x64.zip
 ```
+
+Rilis Linux dan macOS dibangun oleh GitHub Actions (`.github/workflows/release.yml`) pada sistemnya masing-masing, karena macOS Apple silicon hanya menjalankan program yang ditandatangani. / The Linux and macOS downloads are built by GitHub Actions on their own systems, because Apple silicon only runs signed programs.
 
 ## Jalankan dari sumber / Run from source
 
@@ -32,6 +39,9 @@ dotnet run --project src/BattleNusantara.Server -c Release --no-launch-profile -
 # Desktop Windows; permainan solo tidak memerlukan server
 # Windows desktop; solo play does not require a server
 dotnet run --project src/BattleNusantara.Desktop -c Release
+
+# macOS / Linux desktop (Photino; also runs on Windows)
+dotnet run --project src/BattleNusantara.Photino -c Release
 ```
 
 Aset Three.js dan GLB tersedia lokal; permainan tidak mengambil aset dari CDN. / Three.js and GLB assets are local; gameplay does not fetch assets from a CDN.
@@ -44,9 +54,10 @@ Pilih mode dan hero melalui **Mulai petualangan**. Klik tanah untuk bergerak; se
 
 | Mode | Tersedia / Available |
 | --- | --- |
-| RTS Skirmish | Pasukan, pekerja tambang, pos penyetoran, upgrade, hancurkan gerbang / Troops, mining workers, drop-off outposts, upgrades, destroy the gate |
-| MOBA Arena | 5v5 dengan hero AI, menara, item, respawn, dan boss netral / 5v5 with AI heroes, towers, items, respawns and a neutral boss |
+| RTS Skirmish | Pasukan, pekerja tambang, pos penyetoran, upgrade, hancurkan gerbang; tiga peta / Troops, mining workers, drop-off outposts, upgrades, destroy the gate; three maps |
+| MOBA Arena | 5v5 dengan hero AI, menara, item, respawn, dan boss netral; tiga peta / 5v5 with AI heroes, towers, items, respawns and a neutral boss; three maps |
 | Adventure | Temukan tiga prasasti dan kalahkan boss / Recover three inscriptions and defeat the boss |
+| Semua mode / Every mode | Kamp monster dengan harta, hewan liar, penduduk desa / Jungle camps with treasure, wildlife, villagers |
 | LAN co-op | Ruang dua pemain melawan AI, emas bersama, cooldown terpisah / Two-player rooms against AI, shared gold, separate cooldowns |
 
 ![Pertempuran RTS di desktop WPF / RTS battle in the WPF desktop](docs/screenshots/desktop.png)
@@ -211,6 +222,38 @@ On the western shore waits the **Old Captain** with a **side quest generated** f
 
 Versi 0.13 mengubah snapshot (`UnitView.Model`): semua klien dan server LAN harus memakai 0.13. Simpanan Adventure dari 0.10–0.12 tetap dapat dimuat. / Version 0.13 changes the snapshot (`UnitView.Model`): all LAN clients and servers must run 0.13. Adventure saves from 0.10–0.12 still load.
 
+## Dunia yang hidup / A living world — v0.14
+
+**Tujuh peta dalam tiga ukuran.** RTS: Lembah Candi (sedang), Pesisir Selatan (kecil, di antara dua laguna), dan Hutan Larangan (besar, dengan rumpun yang menutup pandangan). MOBA: Arena Jagat (sedang), Gelanggang Sabana (kecil), dan Jembatan Naga (besar, dibelah sungai dengan tiga jembatan). Adventure: Pulau Prasasti. Pilih peta di panel bermain; ukuran tertulis di sampingnya. Setiap peta adalah pulau ala Warcraft: gunung dan **gunung api berasap** di cakrawala, pantai berbuih dengan laut dangkal berwarna toska, danau dan sungai, hutan, sawah, sabana, rawa, gurun, dan tanah tandus, dengan pepohonan yang bergoyang tertiup angin. Desa di belakang candi sekutu dihuni penduduk yang bekerja di sawah dan berlari pulang saat pertempuran mendekat.
+
+**Seven maps in three sizes.** RTS: Temple Valley (medium), Southern Shore (small, between two lagoons) and Forbidden Forest (large, with groves that block sight). MOBA: Jagat Arena (medium), Savanna Ring (small) and Dragon Bridges (large, split by a river with three bridges). Adventure: Inscription Isle. Pick the map in the play panel; its size is shown beside it. Every map is a Warcraft-style island: mountains and a **smoking volcano** on the horizon, foaming beaches over turquoise shallows, lakes and rivers, forest, rice fields, savanna, swamp, desert and barren land, with trees that sway in the wind. The village behind the allied shrine is home to villagers who work the fields and run indoors when fighting comes near.
+
+![Jembatan Naga, pulau besar dengan gunung api / Dragon Bridges, a large island with its volcano](docs/screenshots/world-islands.png)
+
+![Hutan Larangan, peta besar / Forbidden Forest, a large map](docs/screenshots/map-hutan-larangan.png)
+
+**Kamp monster dan harta.** Seperti creep netral di Warcraft III dan Dota, setiap peta punya kamp penunggu dalam empat tingkat: **Lemah** (tiga tuyul), **Sedang** (siluman kera dan siluman macan), **Kuat** (siluman buaya dan genderuwo), dan **Purba** (Banaspati, roh api, dengan pengawal siluman macan). Monster menjaga kampnya, mengejar sampai batas tertentu lalu pulang memulihkan diri, dan muncul lagi satu sampai empat menit setelah dikalahkan. Kamp yang ditaklukkan menjatuhkan **harta sesuai kesulitannya**: jamu dan batu asah dari kamp lemah, keris luk tujuh dan zirah sisik naga dari kamp kuat, Mustika Banaspati dan peti harta dari kamp purba. Hero yang melangkahi harta mengambilnya untuk **peningkatan permanen** selama pertandingan (serangan, HP, kecepatan, pemulihan, atau emas); temuanmu tampil di panel hero.
+
+**Jungle camps and treasure.** Like neutral creeps in Warcraft III and Dota, every map has guarded camps in four tiers: **Weak** (three tuyul), **Medium** (monkey and tiger siluman), **Strong** (crocodile siluman and a genderuwo) and **Ancient** (Banaspati, a fire spirit, guarded by tiger siluman). Monsters guard their camp, chase only so far before walking home to heal, and return one to four minutes after they fall. A cleared camp drops **treasure that matches its difficulty**: tonics and whetstones from weak camps, a seven-wave keris and dragon-scale mail from strong ones, the Banaspati gem and a treasure chest from ancient ones. A hero who walks over treasure takes it for a **permanent upgrade** for the rest of the match (attack, HP, speed, healing or gold); your finds are listed in the hero panel.
+
+![Kamp lemah ditaklukkan dengan ultimate / A weak camp falls to the ultimate](docs/screenshots/jungle-camp.png)
+
+![Pilar cahaya menandai harta yang jatuh / A pillar of light marks the treasure it dropped](docs/screenshots/treasure.png)
+
+**Hewan liar.** Tidak semua makhluk adalah monster. Kancil yang pemalu lari menjauh, kerbau tenang merumput sampai diganggu, babi hutan menyeruduk siapa pun yang terlalu dekat, dan di RTS **kera pencuri** merampas emas yang dibawa pekerja lalu kabur: kejar dan kalahkan untuk mengambilnya kembali. Ayam berkeliaran di desa; burung melintas di siang hari, kupu-kupu di atas bunga, dan kunang-kunang di hutan dan rawa saat malam.
+
+**Wildlife.** Not every creature is a monster. The shy mouse-deer runs away, the calm water buffalo grazes until it is disturbed, the wild boar charges anyone who comes too close, and in RTS the **thieving macaque** snatches the gold a worker carries and runs off: catch it to get the gold back. Chickens wander the village; birds cross the sky by day, butterflies flit over flowers and fireflies drift through forest and swamp at night.
+
+**Suara dan efek.** Musik orkestra-gamelan yang digubah untuk game ini: tema menu "Borobudur Quantum", musik eksplorasi dengan saron, bonang, gong, kendang, dan suling, serta **lapisan pertempuran** (taiko, string, brass, koor) yang berjalan serempak dan naik bersama pertarungan. Ada stinger menang dan kalah, suasana siang, malam, dan hujan, serta 23 efek suara yang terdengar dari arah asalnya. Semuanya disintesis dan dirender oleh `scripts/compose_audio.py`, tanpa sampel atau rekaman. Efek visual: bloom pada GPU, percikan serangan, debu, asap gunung api, api obor, pilar cahaya di atas harta, ledakan saat kamp ditaklukkan, cahaya saat naik level, dan partikel pada setiap ultimate.
+
+**Sound and effects.** Gamelan-orchestral music composed for the game: the "Borobudur Quantum" title theme, an exploration piece with saron, bonang, gongs, kendang and suling, and a **battle layer** (taiko, strings, brass, choir) that plays in sync and rises with the fighting. There are victory and defeat stingers, day, night and rain ambience, and 23 sound effects heard from where they happen. All of it is synthesized and rendered by `scripts/compose_audio.py`, with no samples or recordings. Visual effects: bloom on a GPU, hit sparks, dust, volcano smoke, torch fire, light pillars over treasure, a burst when a camp is cleared, a glow on level-up, and particles on every ultimate.
+
+**Kamera.** Roda tetikus mendekat dan menjauh, tombol panah dan tombol tengah tetikus menggeser, **F** memusatkan pada hero, **Home** kembali ke seluruh peta. / **Camera.** The mouse wheel zooms, the arrow keys and the middle mouse button pan, **F** centres on your hero and **Home** returns to the whole map.
+
+Kualitas hemat daya memakai karakter versi ringan (sekitar sepertiga segitiga) dan seperempat dekorasi. / Power-saving quality draws lighter characters (about a third of the triangles) and a quarter of the scattered nature.
+
+Versi 0.14 mengubah protokol (`MatchView.Map`, `Size`, `Treasures`; jenis rintangan; peta pada `Create`): semua klien dan server LAN harus memakai 0.14. Simpanan Adventure versi lama tetap dapat dimuat, dengan kamp dan hewan baru. / Version 0.14 changes the protocol (`MatchView.Map`, `Size`, `Treasures`; obstacle kinds; the map in `Create`): all LAN clients and servers must run 0.14. Older Adventure saves still load, with fresh camps and wildlife.
+
 ## Pengujian / Tests
 
 ```powershell
@@ -234,4 +277,4 @@ Tes browser menjalankan server otomatis pada port 5080 dan menggunakan Edge. / B
 - [Roadmap](PLAN.md) · [Status dan batasan / Status and limitations](Progress.md)
 - [Aset dan lisensi pihak ketiga / Assets and third-party notices](docs/ASSETS.md)
 
-Belum tersedia: ranked dan 5v5 antarpemain, matchmaking publik, guild, 128 pemain, deployment multi-host, open world, ray tracing/WebGPU, serta musik dan suara dengan lisensi komersial. / Not implemented: ranked or player-versus-player 5v5, public matchmaking, guilds, 128 players, multi-host deployment, open world, ray tracing/WebGPU, or commercially licensed music and voices.
+Belum tersedia: ranked dan 5v5 antarpemain, matchmaking publik, guild, 128 pemain, deployment multi-host, open world, ray tracing/WebGPU, serta suara dialog dengan lisensi komersial. / Not implemented: ranked or player-versus-player 5v5, public matchmaking, guilds, 128 players, multi-host deployment, open world, ray tracing/WebGPU, or commercially licensed dialogue voices.

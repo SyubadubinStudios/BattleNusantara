@@ -5,6 +5,7 @@
 ```mermaid
 flowchart LR
     WPF[WPF + WebView2] --> UI[Shared Razor UI]
+    Photino[Photino + WebKit macOS/Linux] --> UI
     Web[ASP.NET Core host] --> UI
     UI --> Client[GameClient]
     Client --> Local[Local Match]
@@ -172,6 +173,39 @@ Semua hal pada bagian ini adalah tampilan. Tidak ada yang berada di `Match`, dan
 
 **Rendering.** Satu template per varian karakter, dikloning per unit; material `Fixed` dipakai bersama, `Tint` per warna unit. Cutscene adalah daftar shot dengan jalur kamera.
 
+## Version 0.14 / Versi 0.14
+
+**Maps.** `Maps.cs` defines seven maps (`Maps.All`; the first of each mode is its default). A `MapDefinition` lists only what makes a map different: obstacles (`ObstacleView` with a `Kind`: ruin, rock, grove or water), gold mines, camps, and two presentation-only fields, `Regions` (painted biomes) and `Edges` (the land beyond the north, east, south and west sides: gunung, vulkan, laut, hutan or gurun). `MapLayout(size)` derives every shared position from the size: bases at 0.13 S and 0.87 S, hero, recruit, worker and wave spawns, lanes through (0.2 S, 0.8 S), the centre and (0.8 S, 0.2 S), towers, the boss at (0.66 S, 0.34 S), outpost reach 0.55 S and explored cells ⌈S/2⌉. At size 100 these are exactly the numbers of 0.13, so every older test still holds. `Maps.Resolve(mode, id)` returns the mode's default for no id and null for an unknown id or another mode's map; the hub answers that with "Unknown map." Matchmaking picks a random map of the mode for each group. `NavigationMap(obstacles, size)` keeps ground from 4 to S − 4 walkable; water blocks walking but not sight (`BlocksSight`). The Adventure cave walls and door still come from `NavigationMap`, not from the map. The snapshot carries `Map` and `Size`; the client looks the definition up in its own Core, which the version rule guarantees is the same.
+
+**Peta.** `Maps.cs` mendefinisikan tujuh peta. `MapDefinition` hanya mencatat pembeda tiap peta: rintangan berjenis (reruntuhan, batu, rumpun, air), tambang, kamp, serta `Regions` dan `Edges` yang hanya untuk tampilan. `MapLayout(size)` menurunkan semua posisi bersama dari ukuran; pada ukuran 100 hasilnya sama persis dengan 0.13. Peta yang tidak dikenal ditolak hub. Air menghalangi langkah tetapi tidak pandangan. Snapshot membawa `Map` dan `Size`.
+
+**Neutral camps.** Creeps are kind `creep`, team 3, owner −1, three per camp from `Catalog.CampCreeps(tier)`. A creep notices player units within 7, or any unit of the team that last hit it while it is provoked (80 ticks); a creep that fights alerts its whole camp for 40 ticks, which then engages anything within 14 of the camp. A creep never goes more than 16 from its post: beyond that it walks home, healing 2% a tick, and is whole again on arrival. Idle creeps heal 0.2% a tick. AI armies never pick camps on their own (`Engages`): heroes always may, other player units only within 8. When the last creep of a camp falls, the camp counts a clear and returns after 600, 900, 1,200 or 2,400 ticks by tier (later while a player stands within 12). If players landed the last hit it drops `Match.CampDrops(seed, camp, clears, tier)`, a pure function, so clients and a resumed save agree: Weak camps a minor item half the time, Medium a minor and sometimes a major one, Strong a major and sometimes a minor one, Ancient a legendary, a major and the treasure chest. Creep bounty is gold, plus experience in MOBA.
+
+**Kamp netral.** Creep adalah jenis `creep` pada tim 3, tiga per kamp. Creep memperhatikan unit pemain dalam jarak 7, kampnya ikut siaga dalam radius 14, dan tidak pernah mengejar lebih dari 16 dari posnya; di luar itu ia pulang sambil memulihkan diri. Pasukan AI tidak menyerang kamp atas kemauan sendiri. Kamp kembali setelah 1–4 menit dan menjatuhkan harta dari fungsi murni `CampDrops`, sehingga semua klien dan simpanan sepakat.
+
+**Loot.** Items on the ground are kind `loot`, team 2, model = item id, colour = rarity. At most ten lie on the ground; the oldest goes first. A hero within 3 takes one: attack, maximum HP, a heal, a speed bonus (capped at +100%) or gold, for the rest of the match. `MatchView.Treasures` lists the viewing owner's last 16 finds for the HUD.
+
+**Loot.** Harta di tanah berjenis `loot` pada tim 2; paling banyak sepuluh sekaligus. Hero dalam jarak 3 mengambilnya untuk peningkatan permanen selama pertandingan; `MatchView.Treasures` mencatat 16 temuan terakhir.
+
+**Wildlife.** Animals are kind `wild`, team 3: one or two per region whose biome suits them, placed from the match seed away from bases, camps and mines; thieves appear only in RTS (a mouse-deer takes their place elsewhere). Timid animals flee from any army unit within 9. Calm ones charge only when provoked. Territorial boars charge within 5, or within 12 when provoked, and never stray beyond 13 from home. The thieving macaque takes the whole load of a worker within 2, runs home and keeps it for 300 ticks; killing it first returns the gold to the team. Fallen animals return home after 900 ticks. Armies fight animals only when the animal fights (provoked, a nearby boar or thief). Animals never block outposts: the navigation rebuild moves them out of new footprints. RTS fog hides teams 1 and 3.
+
+**Hewan liar.** Hewan berjenis `wild` pada tim 3, satu atau dua per wilayah yang cocok, ditempatkan dari benih pertandingan. Kancil lari, kerbau hanya melawan bila diganggu, babi hutan menyeruduk dalam jarak 5, dan kera pencuri di RTS merampas muatan pekerja; mengalahkannya mengembalikan emas. Hewan tidak pernah menghalangi pos.
+
+**Save format 3.** Saves keep camps (clears, respawn and alert ticks), pending wildlife, treasures and the new unit fields (camp, home, cargo, provocation, retreat, speed bonus, boost, last hit stored as +1). Fields at their default are omitted, so a busy save stays under 12,000 characters. Team 3 is accepted only for creeps and wildlife, loot ids must exist, and creep counts are bounded by the map's camps. Versions 1 and 2 load with fresh camps and animals.
+
+**Simpanan versi 3** menyimpan kamp, hewan yang menunggu muncul, harta, dan medan unit baru; nilai bawaan tidak ditulis agar tetap di bawah 12.000 karakter. Simpanan versi 1 dan 2 tetap dapat dimuat.
+
+**Renderer modules.** `world.js` keeps the frame loop, units, camera and input, and uses four modules, all presentation:
+
+- `terrain.js` builds the island for a `MapDefinition` passed by `GameShell` (`setMap`): a heightfield every 2.1 units (3.2 on power saving) over the arena and a 70-unit apron that always ends in the sea; ridged mountains, volcano cones with craters, forested hills, dunes and beaches by edge; biome vertex colours; worn paths; one inland water plane over carved lakes and rivers; a 128×128 depth texture that the sea shader reads for colour and surf. Scattered nature from `environment.glb` is drawn with one `InstancedMesh` per part and bends in the wind in the vertex shader. Obstacles are dressed separately and redressed when the snapshot's obstacle list changes (the cave door).
+- `effects.js` holds two GPU point pools (additive and alpha) in ring buffers; the CPU writes only new particles. Recipes cover hits, deaths, ultimates, loot, level-ups and cleared camps; steady sources are torches, volcano smoke, loot wisps and fireflies. Bloom, a colour grade and FXAA run through `EffectComposer` on a half-float target without multisampling, only on high quality with a GPU, and are dropped for the session if frames stay above 26 ms for four seconds.
+- `life.js` animates villagers and chickens from the rigged templates with a small state machine (rest, walk, work, flee, hide), and draws birds and butterflies as instanced meshes that flap in the vertex shader.
+- `audio.js` builds the Web Audio graph: decoded buffers for effects, ambience and the two match layers (started together so they stay sample-locked), a media element for the title theme, gains that follow the scene, and a per-sound throttle with at most 16 voices.
+
+Power saving loads `characters-lod.glb`; changing the quality loads the other set and redraws the characters on screen. A software rasterizer (SwiftShader) draws high quality without bloom and shadows and with half the scattered nature.
+
+**Modul renderer.** `terrain.js` membangun pulau dari definisi peta; `effects.js` mengurus partikel GPU dan bloom; `life.js` menghidupkan penduduk, ayam, burung, dan kupu-kupu; `audio.js` mengurus musik, suasana, dan efek suara. Semuanya hanya tampilan dan tidak pernah memengaruhi `Match`, snapshot, atau simpanan.
+
 ## Production expansion / Perluasan produksi
 
 | Area | Next implementation / Implementasi berikutnya |
@@ -183,7 +217,7 @@ Semua hal pada bagian ini adalah tampilan. Tidak ada yang berada di `Match`, dan
 | Semantic Kernel | Two NPCs with topics and typed questions; next: reviewed reply sets, more NPCs, per-account quotas / Dua NPC; berikutnya kumpulan jawaban yang ditinjau dan kuota per akun |
 | Physics/pathfinding | Spatial acceleration and unit avoidance after dynamic outpost routing / Akselerasi spasial dan penghindaran antarunit setelah navigasi pos dinamis |
 | Rust | Optional C ABI batch library only after profiling identifies a bottleneck / Library batch C ABI hanya bila profiling membuktikan kebutuhan |
-| Rendering | Per-unit models on one rig; next: LODs, instanced skinning above about 100 characters, per-faction rigs / Model per unit; berikutnya LOD dan skinning ber-instance |
+| Rendering | Per-unit models on one rig, a decimated set for power saving, instanced nature; next: distance LODs on high quality, instanced skinning above about 100 characters, per-faction rigs / Model per unit, set ringan untuk hemat daya, alam ber-instance; berikutnya LOD menurut jarak dan skinning ber-instance |
 
 Rust is authorized by the repository owner but is not currently needed or included. Preserve deterministic inputs/outputs and safe buffer ownership if adding native interop; benchmark against the C# baseline before accepting complexity.
 

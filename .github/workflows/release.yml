@@ -1,0 +1,49 @@
+# Builds the Linux and macOS downloads on their own systems (macOS signs the bundle ad hoc, which Apple silicon
+# requires) and attaches them to the GitHub release of the tag. The Windows installer comes from scripts/package.ps1.
+name: Release Linux and macOS
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to attach the downloads to (for example v0.14.0)'
+        required: true
+permissions:
+  contents: write
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            rids: linux-x64
+          - os: macos-latest
+            rids: osx-arm64,osx-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-0 libgtk-3-0 libnotify4 xvfb
+      - run: python3 scripts/package_unix.py --rids ${{ matrix.rids }}
+      - name: Smoke the packaged game (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir smoke && tar -xzf artifacts/installer/*-linux-x64.tar.gz -C smoke
+          cd smoke/battle-of-nusantara && NUSANTARA_SMOKE_SECONDS=40 WEBKIT_DISABLE_DMABUF_RENDERER=1 xvfb-run -a ./play.sh
+      - name: Smoke the packaged game (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir smoke && ditto -x -k artifacts/installer/*-osx-arm64.zip smoke
+          codesign --verify --deep --strict "smoke/Battle of Nusantara.app"
+          NUSANTARA_SMOKE_SECONDS=40 "smoke/Battle of Nusantara.app/Contents/MacOS/BattleNusantara"
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ inputs.tag || github.ref_name }}" artifacts/installer/*.tar.gz artifacts/installer/*.zip artifacts/installer/*.sha256 --clobber --repo "${{ github.repository }}"

@@ -38,7 +38,7 @@ public sealed class LoadTests(ITestOutputHelper output)
                     var hub = await PlatformHostTests.Hub(url, null);
                     clients.Add(hub);
                     hub.On<MatchView>("State", view => { Interlocked.Increment(ref received); if (Interlocked.Read(ref received) % 97 == 0) Interlocked.Add(ref bytes, System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(view).Length * 97L); });
-                    var joined = code is null ? await hub.InvokeAsync<RoomJoined>("Create", "Rts", "gajah-mada") : await hub.InvokeAsync<RoomJoined>("Join", code, Catalog.Heroes[seat % Catalog.Heroes.Count].Id);
+                    var joined = code is null ? await hub.InvokeAsync<RoomJoined>("Create", "Rts", "gajah-mada", (string?)null) : await hub.InvokeAsync<RoomJoined>("Join", code, Catalog.Heroes[seat % Catalog.Heroes.Count].Id);
                     code = joined.Code;
                     heroes.Add((hub, joined.State.Units.First(u => u.Kind == "hero" && u.Owner == joined.Owner).Id, seat));
                 }

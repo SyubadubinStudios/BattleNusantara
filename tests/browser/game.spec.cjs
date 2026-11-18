@@ -5,7 +5,8 @@ const calm = page => page.addInitScript(() => { if (!localStorage.getItem('nusan
 async function ready(page, cinematics = false) {
   if (!cinematics) await calm(page);
   await page.goto('/');
-  await expect(page.locator('.world')).toHaveAttribute('data-ready', 'true', { timeout: 30000 });
+  // A second or third page starts while the first renders a match on the CPU rasterizer, so allow it a minute.
+  await expect(page.locator('.world')).toHaveAttribute('data-ready', 'true', { timeout: 60000 });
 }
 async function play(page, mode = 'RTS Skirmish') {
   await page.getByRole('button', { name: 'MULAI PETUALANGAN' }).click();
@@ -177,6 +178,8 @@ test('MOBA shows towers, sells levelled items and respawns the fallen hero', asy
   await expect(page.locator('.match-label')).toContainText('MOBA');
 });
 test('two clients join a real SignalR room and receive the same simulation', async ({ page, browser }) => {
+  // Two or three pages each render a whole island on the software rasterizer of the test browser, so these take longer.
+  test.setTimeout(180000);
   await page.addInitScript(() => localStorage.setItem('nusantara.settings', JSON.stringify({ language: 'id', quality: 'low', reducedMotion: true, volume: 0 })));
   await ready(page);
   await page.getByRole('button', { name: 'MULAI PETUALANGAN' }).click();
@@ -459,6 +462,8 @@ test('Adventure shows quests and dialogue, guards, saves and resumes the run', a
 });
 
 test('a spectator watches a LAN room without a seat or orders', async ({ page, browser }) => {
+  // Two or three pages each render a whole island on the software rasterizer of the test browser, so these take longer.
+  test.setTimeout(180000);
   await quiet(page);
   await ready(page);
   await page.getByRole('button', { name: 'MULAI PETUALANGAN' }).click();
@@ -504,13 +509,75 @@ test('MOBA shows hero experience and the renderer stays inside its draw budget',
   await ready(page); await play(page, 'MOBA Arena');
   await expect(page.locator('progress.xp')).toHaveAttribute('max', '100');
   await expect(page.locator('[data-ability="guard"]')).toBeEnabled();
-  // Let three waves, ten champions, six towers and the boss all be on screen.
+  // Let three waves, ten champions, six towers, the boss, the jungle camps and the wildlife all be on screen,
+  // over the whole landscape: terrain, sea, scattered nature, the village and its people.
   await expect(page.locator('.match-label')).toContainText(/00:[45]\d/, { timeout: 70000 });
   const stats = await rendererStats(page);
   console.log('RENDER moba', JSON.stringify(stats));
   expect(stats.units).toBeGreaterThan(20);
+  expect(stats.neutrals).toBeGreaterThan(5);
+  expect(stats.map).toBe('arena-jagat');
+  expect(stats.characters).toBe('lod'); // Power saving draws the decimated character set.
   expect(stats.calls).toBeLessThan(400);
-  expect(stats.triangles).toBeLessThan(150000);
+  expect(stats.triangles).toBeLessThan(300000);
+});
+
+test('maps come in three sizes and a large map draws its landscape, camps and wildlife', async ({ page }) => {
+  const errors = []; page.on('pageerror', e => errors.push(e.message));
+  await quiet(page);
+  await ready(page);
+  await page.getByRole('button', { name: 'MULAI PETUALANGAN' }).click();
+  await page.locator('.mode-tabs').getByRole('button', { name: 'RTS Skirmish', exact: true }).click();
+  const picker = page.locator('#map');
+  await expect(picker.locator('option')).toHaveCount(3);
+  await expect(picker).toContainText('kecil (80)');
+  await expect(picker).toContainText('sedang (100)');
+  await expect(picker).toContainText('besar (140)');
+  await picker.selectOption('hutan-larangan');
+  await expect(page.locator('.map-note')).toContainText('7 kamp monster');
+  await page.getByRole('button', { name: 'MAIN SOLO', exact: false }).click();
+  await expect(page.locator('.battle-bottom')).toBeVisible();
+  const map = page.locator('.tactical-map');
+  await expect(map).toHaveAttribute('viewBox', '0 0 140 140');
+  await expect(map.locator('circle.map-camp')).toHaveCount(7);
+  await expect.poll(async () => (await rendererStats(page))?.map).toBe('hutan-larangan');
+  const stats = await rendererStats(page);
+  expect(stats.size).toBe(140);
+  expect(stats.decor).toBeGreaterThan(100);
+  expect(stats.life).toBeGreaterThan(0); // Villagers and chickens in the village behind the shrine.
+  // The tactical map is scaled to the map: a click at (40, 30) of 140 sends the hero there.
+  const bounds = await map.boundingBox();
+  await map.click({ position: { x: bounds.width * 40 / 140, y: bounds.height * 30 / 140 } });
+  const hero = map.locator('circle[data-unit-id="1"]');
+  await expect.poll(async () => Math.abs(Number(await hero.getAttribute('cx')) - 40), { timeout: 20000 }).toBeLessThan(1.5);
+  await page.screenshot({ path: 'docs/screenshots/map-hutan-larangan.png' });
+  expect(errors).toEqual([]);
+});
+
+test('jungle camps, wildlife, particles and the soundtrack come with the match', async ({ page }) => {
+  const errors = []; page.on('pageerror', e => errors.push(e.message));
+  await ready(page);
+  await page.mouse.click(700, 400); // A gesture lets the browser start sound.
+  await expect.poll(async () => (await rendererStats(page)).audio).toBe('running');
+  await expect.poll(async () => (await rendererStats(page)).music).toBe('menu');
+  await play(page, 'MOBA Arena');
+  await expect.poll(async () => (await rendererStats(page)).neutrals).toBeGreaterThan(5);
+  // Torches and the volcano smoke never stop.
+  const before = (await rendererStats(page)).particles;
+  await expect.poll(async () => (await rendererStats(page)).particles).toBeGreaterThan(before);
+  await expect.poll(async () => (await rendererStats(page)).music).toMatch(/explore|battle/);
+  for (const [name, size] of [['music-explore', 300000], ['music-battle', 300000], ['music-menu', 300000], ['ambience-day', 100000], ['hit', 2000], ['loot', 5000], ['victory', 30000]]) {
+    const response = await page.request.get(`/_content/BattleNusantara.UI/audio/${name}.ogg`);
+    expect(response.status(), name).toBe(200);
+    expect((await response.body()).length, name).toBeGreaterThan(size);
+  }
+  // Switching to power saving redraws every character from the decimated set.
+  await page.getByRole('button', { name: /Pengaturan/ }).click();
+  await page.locator('#quality').selectOption('low');
+  await page.getByRole('button', { name: 'Tutup', exact: true }).click();
+  await expect.poll(async () => (await rendererStats(page)).characters, { timeout: 30000 }).toBe('lod');
+  await expect.poll(async () => (await rendererStats(page)).models).toBeGreaterThan(20);
+  expect(errors).toEqual([]);
 });
 
 const openAccount = async page => {
@@ -568,6 +635,8 @@ test('an account registers, survives a reload, signs out and signs back in', asy
 });
 
 test('matchmaking seats two signed-in players in one room', async ({ page, browser }) => {
+  // Two or three pages each render a whole island on the software rasterizer of the test browser, so these take longer.
+  test.setTimeout(180000);
   await quiet(page);
   await ready(page);
   const register = async (target, name) => {

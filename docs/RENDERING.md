@@ -43,6 +43,24 @@ Same laptop, real GPU, high quality, 1440×900: MOBA with 17–23 units and the 
 
 Laptop yang sama, GPU nyata, kualitas tinggi, 1440×900: MOBA dengan 17–23 unit dan sinematik pembuka, serta Adventure saat hujan, keduanya bertahan pada waktu frame rata-rata sekitar 16,7 ms (batas layar 60 Hz) dengan 80–155 draw call dan sekitar 31.000–36.000 segitiga. Anggaran yang dijaga tes ada di [PERFORMANCE.md](PERFORMANCE.md).
 
+## Landscapes and bloom in v0.14 / Lanskap dan bloom di v0.14
+
+Same laptop, real GPU (ANGLE on Direct3D 11), Edge, 1440×900, measured with `stats()` a few seconds into each match. v0.14 draws a whole island per map: a terrain heightfield, the sea, instanced nature, a village with its people, jungle camps and wildlife.
+
+Laptop yang sama, GPU nyata (ANGLE di Direct3D 11), Edge, 1440×900, diukur dengan `stats()` beberapa detik setelah pertandingan dimulai. v0.14 menggambar satu pulau penuh per peta.
+
+| Scene / Adegan | Quality / Kualitas | Draw calls | Triangles / Segitiga | Frame time / Waktu frame |
+| --- | --- | --- | --- | --- |
+| MOBA, Jagat Arena, ~38 units | high, bloom + FXAA | 336 | 600,000 | 16.7 ms |
+| MOBA, Dragon Bridges (large), ~50 units | high, bloom + FXAA | 390 | 875,000 | about 20 ms |
+| MOBA, Jagat Arena | high, bloom with 4× MSAA | 333 | 600,000 | 31–36 ms |
+| MOBA, Jagat Arena | high, no bloom | 323 | 602,000 | 16.7 ms |
+| MOBA, Jagat Arena | power saving, decimated characters | 171 | 181,000 | 16.7 ms |
+
+Shadows and triangles were not the problem: without bloom the large scene held the 60 Hz limit. The cost was a **multisampled half-float render target**, which roughly doubled the frame time on this integrated GPU; without multisampling the same bloom chain fits. The chain is therefore bloom, an output pass, a colour grade and **FXAA** for edges, on a half-float target without MSAA. If frames still stay above 26 ms for four seconds, the game turns bloom off for the rest of the session. A software rasterizer (SwiftShader, used by the browser tests) never gets bloom or shadows and draws half the scattered nature; there, a MOBA frame at power saving took about 280 ms.
+
+Bayangan dan jumlah segitiga bukan masalahnya: tanpa bloom adegan besar tetap pada batas 60 Hz. Biayanya berasal dari **render target half-float dengan multisampling**, yang kira-kira menggandakan waktu frame pada GPU terintegrasi ini. Karena itu rantainya kini bloom, output, grade warna, dan **FXAA** pada target half-float tanpa MSAA. Bila frame tetap di atas 26 ms selama empat detik, bloom dimatikan untuk sisa sesi. Rasterizer perangkat lunak (SwiftShader) tidak pernah mendapat bloom atau bayangan dan hanya menggambar setengah dekorasi alam.
+
 ## Ray tracing — not measured / tidak diukur
 
 Assessment only. Browsers expose no hardware ray-tracing API: WebGL2 has none, and WebGPU has no ray-tracing extension in shipping Edge. Ray tracing in the browser therefore means tracing in a fragment or compute shader against a hand-built acceleration structure. The measured device already spends about a third of its frame budget rasterizing a few hundred small meshes, so a software path tracer at 1440×900 is not plausible there. The scene is also a top-down arena lit by one sun, where a shadow map already gives the visible result. **Decision: not pursued.** If richer lighting is wanted, the cheaper candidates are baked ambient occlusion in the Blender assets and screen-space effects, each measured before adoption.

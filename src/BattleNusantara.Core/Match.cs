@@ -4,19 +4,24 @@ public sealed record GameCommand(CommandKind Kind, double X = 0, double Z = 0, i
 public sealed record UnitView(int Id, int Owner, string Kind, int Team, double X, double Z, double Health, double MaxHealth, string Color, UnitOrder Order, double TargetX, double TargetZ, int Cargo, int Construction = 100, int CancelRefund = 0, int Queue = 0, string Model = "");
 public sealed record ResourceView(int Id, double X, double Z, int Remaining);
 public sealed record VisionView(double X, double Z, double Radius);
-public sealed record MatchView(GameMode Mode, MatchStatus Status, long Tick, int Gold, int Supplies, int Level, int Relics, double BaseHealth, double EnemyBaseHealth, double UltimateCooldown, string Message, UnitView[] Units, ObstacleView[] Obstacles, ResourceView[] Resources, int GoldCollected, VisionView[] Vision, double Respawn = 0, int Items = 0, double Buff = 0, double Experience = 0, double GuardCooldown = 0, double EnemyBuff = 0, QuestView[]? Quests = null, string Dialogue = "");
+public sealed record MatchView(GameMode Mode, MatchStatus Status, long Tick, int Gold, int Supplies, int Level, int Relics, double BaseHealth, double EnemyBaseHealth, double UltimateCooldown, string Message, UnitView[] Units, ObstacleView[] Obstacles, ResourceView[] Resources, int GoldCollected, VisionView[] Vision, double Respawn = 0, int Items = 0, double Buff = 0, double Experience = 0, double GuardCooldown = 0, double EnemyBuff = 0, QuestView[]? Quests = null, string Dialogue = "", string Map = "", double Size = 100, string[]? Treasures = null);
 
 /// <summary>Deterministic 10 Hz simulation. Callers serialize access to each match.</summary>
 public sealed partial class Match
 {
     public const double StepSeconds = .1;
-    public const int MaxUnits = 100;
+    public const int MaxUnits = 160;
     /// <summary>Human players in one co-op match. MOBA is limited to the five allied hero slots.</summary>
     public const int MaxPlayers = 10;
     public static int Capacity(GameMode mode) => mode == GameMode.Moba ? 5 : MaxPlayers;
     public const int MaxSelection = 24;
     public const int ConstructionTicks = 80;
     private NavigationMap navigation;
+    // The map's terrain alone (no outposts) for walking, and the obstacles that also block sight (not water).
+    private readonly NavigationMap terrain, sightTerrain;
+    /// <summary>The map being played and the positions derived from its size.</summary>
+    public MapDefinition Map { get; }
+    public MapLayout Layout { get; }
     private readonly List<Unit> units = new(MaxUnits);
     private readonly Dictionary<int, HeroDefinition> players = new();
     private readonly Dictionary<int, double> cooldowns = new();
@@ -32,7 +37,7 @@ public sealed partial class Match
     private readonly Dictionary<int, int> experience = new();
     private readonly Dictionary<int, double> guardCooldowns = new();
     // Ground the allied team has seen at least once, in 2-unit cells. Outposts may only be placed there.
-    private readonly bool[] explored = new bool[50 * 50];
+    private readonly bool[] explored;
     private readonly List<ResourceNode> resources = new();
     public int GoldCollected { get; private set; }
     public const int MaxWorkersPerPlayer = 6;
@@ -51,17 +56,18 @@ public sealed partial class Match
     /// <summary>Seeds what Adventure generates (the side quest). Equal seeds give equal matches.</summary>
     public int Seed { get; }
 
-    public Match(GameMode mode, string heroId, int seed = 0)
+    /// <param name="map">A map id for this mode (see <see cref="Maps"/>); null plays the mode's default map.</param>
+    public Match(GameMode mode, string heroId, int seed = 0, string? map = null)
     {
         if (!Enum.IsDefined(mode)) throw new ArgumentOutOfRangeException(nameof(mode));
         Mode = mode; Seed = seed;
-        navigation = mode switch { GameMode.Rts => NavigationMap.Rts, GameMode.Adventure => NavigationMap.AdventureClosed, _ => NavigationMap.Open };
-        if (mode == GameMode.Rts)
-        {
-            resources.Add(new ResourceNode(1, 20, 34, 120));
-            resources.Add(new ResourceNode(2, 47, 22, 300));
-            resources.Add(new ResourceNode(3, 76, 48, 400));
-        }
+        Map = Maps.Resolve(mode, map) ?? throw new ArgumentException("Unknown map for this mode.", nameof(map));
+        Layout = new MapLayout(Map.Size);
+        explored = new bool[Layout.Cells * Layout.Cells];
+        terrain = mode == GameMode.Adventure ? NavigationMap.AdventureClosed : new NavigationMap(Map.Obstacles, Map.Size);
+        sightTerrain = new NavigationMap(Map.Obstacles.Where(o => o.BlocksSight), Map.Size);
+        navigation = terrain;
+        foreach (var resource in Map.Resources) resources.Add(new ResourceNode(resource.Id, resource.X, resource.Z, resource.Amount));
         AddPlayer(0, heroId);
         if (mode == GameMode.Adventure) SetupAdventure();
         else
@@ -69,6 +75,7 @@ public sealed partial class Match
             if (mode == GameMode.Moba) SetupMoba();
             SpawnWave(1);
         }
+        SetupNeutrals();
         MarkExplored();
     }
 
@@ -77,29 +84,29 @@ public sealed partial class Match
         if (Mode != GameMode.Rts) return;
         foreach (var source in Vision())
         {
-            var minX = Math.Max(0, (int)((source.X - source.Radius) / 2)); var maxX = Math.Min(49, (int)((source.X + source.Radius) / 2));
-            var minZ = Math.Max(0, (int)((source.Z - source.Radius) / 2)); var maxZ = Math.Min(49, (int)((source.Z + source.Radius) / 2));
+            var cells = Layout.Cells;
+            var minX = Math.Max(0, (int)((source.X - source.Radius) / 2)); var maxX = Math.Min(cells - 1, (int)((source.X + source.Radius) / 2));
+            var minZ = Math.Max(0, (int)((source.Z - source.Radius) / 2)); var maxZ = Math.Min(cells - 1, (int)((source.Z + source.Radius) / 2));
             for (var cz = minZ; cz <= maxZ; cz++)
                 for (var cx = minX; cx <= maxX; cx++)
                 {
                     var dx = cx * 2 + 1 - source.X; var dz = cz * 2 + 1 - source.Z;
-                    if (dx * dx + dz * dz <= source.Radius * source.Radius) explored[cz * 50 + cx] = true;
+                    if (dx * dx + dz * dz <= source.Radius * source.Radius) explored[cz * cells + cx] = true;
                 }
         }
     }
 
     /// <summary>True once the allied team has seen this ground. Always true outside RTS.</summary>
     public bool IsExplored(double x, double z) => Mode != GameMode.Rts
-        || (double.IsFinite(x) && double.IsFinite(z) && x >= 0 && x < 100 && z >= 0 && z < 100 && explored[(int)(z / 2) * 50 + (int)(x / 2)]);
+        || (double.IsFinite(x) && double.IsFinite(z) && x >= 0 && x < Map.Size && z >= 0 && z < Map.Size && explored[(int)(z / 2) * Layout.Cells + (int)(x / 2)]);
 
     private void SetupMoba()
     {
         // One tower per lane and side; a shrine or gate is exposed only after one of its towers falls.
-        (double X, double Z)[] towers = [(20, 48), (36, 36), (48, 20)];
-        foreach (var (x, z) in towers)
+        foreach (var (x, z) in Layout.AllyTowers)
         {
             Spawn(-1, "tower", 0, x, z, 600, 22, "#83c9ba");
-            Spawn(-1, "tower", 1, 100 - x, 100 - z, 600, 22, "#d17791");
+            Spawn(-1, "tower", 1, Map.Size - x, Map.Size - z, 600, 22, "#d17791");
         }
         int[] allyLanes = [0, 1, 2, 1]; int[] enemyLanes = [0, 1, 1, 2, 2];
         for (var i = 0; i < allyLanes.Length; i++) SpawnChampion(Catalog.AllyChampions[i], 0, allyLanes[i], i);
@@ -110,19 +117,15 @@ public sealed partial class Match
 
     private Unit SpawnChampion(HeroDefinition definition, int team, int lane, int slot)
     {
-        var x = team == 0 ? 16 + slot * 3 : 84 - slot * 3; var z = team == 0 ? 20 : 80;
+        var (x, z) = Layout.ChampionSpawn(team, slot);
         var unit = Spawn(-1, "champion", team, x, z, definition.Health, definition.Damage, definition.Color);
         unit.HomeX = x; unit.HomeZ = z; unit.Model = definition.Id; SetLane(unit, lane);
         return unit;
     }
 
-    private void SpawnBoss() => Spawn(-1, "boss", 3, 66, 34, 900, 30, "#e9c368").Model = "naga";
+    private void SpawnBoss() => Spawn(-1, "boss", 3, Layout.Boss.X, Layout.Boss.Z, 900, 30, "#e9c368").Model = "naga";
 
-    private static void SetLane(Unit unit, int lane)
-    {
-        unit.LaneX = lane == 0 ? 20 : lane == 2 ? 80 : 50;
-        unit.LaneZ = lane == 0 ? 80 : lane == 2 ? 20 : 50;
-    }
+    private void SetLane(Unit unit, int lane) => (unit.LaneX, unit.LaneZ) = Layout.Lane(lane);
 
     private int Towers(int team) => units.Count(u => u.Kind == "tower" && u.Team == team && u.Health > 0);
 
@@ -158,7 +161,7 @@ public sealed partial class Match
         players.Add(owner, hero);
         cooldowns[owner] = 0; guardCooldowns[owner] = 0; heroLevels[owner] = 1; experience[owner] = 0;
         // The second player keeps the original arrival point; later players line up in two rows south of it.
-        var (spawnX, spawnZ) = owner <= 1 ? (24d + owner * 5, 24d) : (17d + (owner - 2) % 4 * 4, 28d + (owner - 2) / 4 * 4);
+        var (spawnX, spawnZ) = Layout.HeroSpawn(owner);
         var unit = Spawn(owner, "hero", 0, spawnX, spawnZ, hero.Health, hero.Damage, hero.Color);
         unit.HomeX = unit.X; unit.HomeZ = unit.Z; unit.Model = hero.Id;
         if (Mode == GameMode.Moba && owner > 0)
@@ -228,13 +231,13 @@ public sealed partial class Match
                         cooldowns[owner] = 18;
                         break;
                 }
-                if (Mode != GameMode.Adventure && BaseExposed(1) && Distance(hero.X, hero.Z, 87, 87) < 22) EnemyBaseHealth -= 110;
+                if (Mode != GameMode.Adventure && BaseExposed(1) && Distance(hero.X, hero.Z, Layout.EnemyBase, Layout.EnemyBase) < 22) EnemyBaseHealth -= 110;
                 Message = players[owner].Skill;
                 return true;
             case CommandKind.Recruit:
                 if (Mode != GameMode.Rts || Gold < 60 || Supplies < 2 || units.Count >= MaxUnits) return false;
                 Gold -= 60; Supplies -= 2;
-                Spawn(owner, "soldier", 0, 17, 20, 110 + Level * 20, 14 + Level * 3, "#d4b478");
+                Spawn(owner, "soldier", 0, Layout.RecruitSpawn.X, Layout.RecruitSpawn.Z, 110 + Level * 20, 14 + Level * 3, "#d4b478");
                 return true;
             case CommandKind.Build:
                 if (Mode != GameMode.Rts || Gold < 100 || units.Count(u => u.Kind == "outpost" && u.Health > 0) >= 4 || units.Count >= MaxUnits || !CanPlaceOutpost(command.X, command.Z)) return false;
@@ -268,7 +271,7 @@ public sealed partial class Match
             case CommandKind.RecruitWorker:
                 if (Mode != GameMode.Rts || Gold < 40 || Supplies < 1 || units.Count >= MaxUnits || units.Count(u => u.Owner == owner && u.Kind == "worker" && u.Health > 0) >= MaxWorkersPerPlayer) return false;
                 Gold -= 40; Supplies--;
-                var worker = Spawn(owner, "worker", 0, 20, 18, 80, 0, "#a5dec4");
+                var worker = Spawn(owner, "worker", 0, Layout.WorkerSpawn.X, Layout.WorkerSpawn.Z, 80, 0, "#a5dec4");
                 worker.Order = UnitOrder.Hold;
                 return true;
             case CommandKind.Upgrade:
@@ -290,6 +293,7 @@ public sealed partial class Match
         if (buffTicks[0] > 0) buffTicks[0]--;
         if (buffTicks[1] > 0) buffTicks[1]--;
         if (Tick % 5 == 0) MarkExplored();
+        AdvanceCamps();
         if (Mode == GameMode.Moba && Tick % ChampionGrowthTicks == 0 && championGrowth < MaxChampionGrowth)
         {
             // AI heroes on both sides grow with match time, keeping pace with the player's levels.
@@ -316,18 +320,21 @@ public sealed partial class Match
         {
             if (unit.Health <= 0 || unit.Team == 2 || unit.Kind == "outpost") continue;
             if (unit.Kind == "worker") { AdvanceWorker(unit); continue; }
-            unit.AttackCooldown -= StepSeconds;
+            // Bottoms out just below zero: only "ready or not" matters, and saves stay short.
+            if (unit.AttackCooldown > -1) unit.AttackCooldown -= StepSeconds;
             if (unit.GuardTicks > 0) unit.GuardTicks--;
             if (unit.BoostTicks > 0) unit.BoostTicks--;
+            if (unit.Kind is "creep" or "wild") { AdvanceNeutral(unit); continue; }
             Unit? nearest = null; Unit? nearestTroop = null; var troopDistance = double.MaxValue;
             var nearestDistance = double.MaxValue;
             foreach (var other in units)
             {
                 if (other.Team == unit.Team || other.Team == 2 || other.Health <= 0) continue;
-                // Only player heroes and healthy enemy hunters pick a fight with the neutral boss, and it answers only them.
-                if (other.Team == 3 && unit.Kind != "hero" && !(unit.Hunter && !unit.Retreating && unit.Health > unit.MaxHealth * .6)) continue;
-                if (unit.Team == 3 && other.Kind != "hero" && !other.Hunter) continue;
                 var distance = Distance(unit, other);
+                // Neutrals are fought by choice (see Engages): heroes take on the boss and camps, hunters only the boss.
+                if (other.Team == 3 && !Engages(unit, other, distance)) continue;
+                // The neutral boss answers only heroes and hunters.
+                if (unit.Team == 3 && other.Kind != "hero" && !other.Hunter) continue;
                 if (distance < nearestDistance) { nearest = other; nearestDistance = distance; }
                 if (unit.Kind == "tower" && other.Kind is not ("hero" or "champion") && distance < troopDistance) { nearestTroop = other; troopDistance = distance; }
             }
@@ -358,7 +365,7 @@ public sealed partial class Match
                 { unit.TargetX = nearest.X; unit.TargetZ = nearest.Z; }
                 else { unit.TargetX = unit.OrderX; unit.TargetZ = unit.OrderZ; }
             }
-            else if (unit.Retreating) unit.TargetX = unit.TargetZ = unit.Team == 0 ? 13 : 87;
+            else if (unit.Retreating) unit.TargetX = unit.TargetZ = unit.Team == 0 ? Layout.AllyBase : Layout.EnemyBase;
             else if (unit.Kind != "hero")
             {
                 if (nearest is not null && nearestDistance < Sight(unit) && (Mode != GameMode.Rts || CanSee(unit, nearest)))
@@ -368,21 +375,24 @@ public sealed partial class Match
                     // MOBA waves follow one of three paths until reaching the enemy shrine.
                     if (Mode == GameMode.Moba && !unit.PassedLane && Distance(unit.X, unit.Z, unit.LaneX, unit.LaneZ) > 3)
                     { unit.TargetX = unit.LaneX; unit.TargetZ = unit.LaneZ; }
-                    else { unit.PassedLane = true; unit.TargetX = unit.Team == 0 ? 87 : 13; unit.TargetZ = unit.TargetX; }
+                    else { unit.PassedLane = true; unit.TargetX = unit.Team == 0 ? Layout.EnemyBase : Layout.AllyBase; unit.TargetZ = unit.TargetX; }
                 }
                 if (inRange) { unit.TargetX = unit.X; unit.TargetZ = unit.Z; }
             }
             Move(unit);
-            if (Mode != GameMode.Adventure && BaseExposed(1 - unit.Team) && unit.AttackCooldown <= 0 && Distance(unit.X, unit.Z, unit.Team == 0 ? 87 : 13, unit.Team == 0 ? 87 : 13) < 12)
+            var hostileBase = unit.Team == 0 ? Layout.EnemyBase : Layout.AllyBase;
+            if (Mode != GameMode.Adventure && unit.Team is 0 or 1 && BaseExposed(1 - unit.Team) && unit.AttackCooldown <= 0 && Distance(unit.X, unit.Z, hostileBase, hostileBase) < 12)
             {
                 if (unit.Team == 0) EnemyBaseHealth -= unit.Damage;
                 else BaseHealth -= unit.Damage;
                 unit.AttackCooldown = 1;
             }
-            if (unit.Kind == "champion" && Distance(unit.X, unit.Z, unit.Team == 0 ? 13 : 87, unit.Team == 0 ? 13 : 87) < 16) unit.Health = Math.Min(unit.MaxHealth, unit.Health + 2);
+            var ownBase = unit.Team == 0 ? Layout.AllyBase : Layout.EnemyBase;
+            if (unit.Kind == "champion" && Distance(unit.X, unit.Z, ownBase, ownBase) < 16) unit.Health = Math.Min(unit.MaxHealth, unit.Health + 2);
             if (unit.Kind == "hero")
             {
-                if (Distance(unit.X, unit.Z, 13, 13) < 16) unit.Health = Math.Min(unit.MaxHealth, unit.Health + (Mode == GameMode.Moba ? 2 : .8));
+                if (Distance(unit.X, unit.Z, Layout.AllyBase, Layout.AllyBase) < 16) unit.Health = Math.Min(unit.MaxHealth, unit.Health + (Mode == GameMode.Moba ? 2 : .8));
+                PickUpLoot(unit);
                 foreach (var relic in units)
                     if (relic.Kind == "relic" && !collected.Contains(relic.Id) && Distance(unit, relic) < 5)
                     { collected.Add(relic.Id); relic.Health = 0; Gold += 80; unit.Health = unit.MaxHealth; Message = "Prasasti ditemukan. / Inscription recovered."; }
@@ -390,8 +400,11 @@ public sealed partial class Match
                     { relic.Health = 0; Gold += 30; Message = "Serpihan kapal ditemukan. / Ship fragment recovered."; }
             }
         }
+        List<Unit>? fallenNeutrals = null;
         foreach (var dead in units.Where(u => u.Health <= 0 && u.Team != 2))
         {
+            // Neutral deaths may drop loot, which adds units: handle them after this pass.
+            if (dead.Kind is "creep" or "wild") { (fallenNeutrals ??= []).Add(dead); continue; }
             if (dead.Team == 1) Gold += dead.Kind switch { "boss" => 200, "tower" => 150, "champion" => 60, _ => 20 };
             if (dead.Team == 3)
             {
@@ -406,6 +419,7 @@ public sealed partial class Match
         }
         var destroyedOutpost = units.Any(u => u.Kind == "outpost" && u.Health <= 0);
         units.RemoveAll(u => u.Health <= 0);
+        if (fallenNeutrals is not null) foreach (var dead in fallenNeutrals) OnNeutralDeath(dead);
         if (destroyedOutpost) RebuildNavigation();
         if (Mode == GameMode.Adventure) AdvanceStory();
         BaseHealth = Math.Max(0, BaseHealth); EnemyBaseHealth = Math.Max(0, EnemyBaseHealth);
@@ -420,17 +434,18 @@ public sealed partial class Match
         var views = new List<UnitView>(units.Count);
         foreach (var u in units)
         {
-            if (fog && Mode == GameMode.Rts && u.Team == 1 && !Sees(vision, u.X, u.Z)) continue;
+            if (fog && Mode == GameMode.Rts && u.Team is 1 or 3 && !Sees(vision, u.X, u.Z)) continue;
             var site = u.Kind == "outpost";
             views.Add(new UnitView(u.Id, u.Owner, u.Kind, u.Team, u.X, u.Z, u.Health, u.MaxHealth, u.Color, u.Order, u.OrderX, u.OrderZ, u.Cargo,
                 u.BuildTicks * 100 / ConstructionTicks, site ? ConstructionRefund(u) : 0, site ? QueuePosition(u) : 0, u.Model));
         }
         return new(Mode, Status, Tick, Gold, Supplies, Mode == GameMode.Moba ? heroLevels.GetValueOrDefault(owner, 1) : Level, Relics, BaseHealth, EnemyBaseHealth, cooldowns.GetValueOrDefault(owner), Message, views.ToArray(),
-            (Mode == GameMode.Rts ? NavigationMap.Rts : navigation).Obstacles.ToArray(), resources.Select(r => new ResourceView(r.Id, r.X, r.Z, r.Remaining)).ToArray(), GoldCollected, vision,
+            (Mode == GameMode.Rts ? terrain : navigation).Obstacles.ToArray(), resources.Select(r => new ResourceView(r.Id, r.X, r.Z, r.Remaining)).ToArray(), GoldCollected, vision,
             (respawns.Find(r => r.Unit.Owner == owner && r.Unit.Kind == "hero")?.Ticks ?? 0) * StepSeconds, items.GetValueOrDefault(owner), buffTicks[0] * StepSeconds,
             Mode == GameMode.Moba && heroLevels.TryGetValue(owner, out var heroLevel) && heroLevel < MaxHeroLevel ? experience[owner] / (heroLevel * 100d) : 0,
             guardCooldowns.GetValueOrDefault(owner), buffTicks[1] * StepSeconds,
-            Mode == GameMode.Adventure ? QuestViews() : null, dialogueKey is null ? "" : $"{dialogueKey}:{dialogueLine}");
+            Mode == GameMode.Adventure ? QuestViews() : null, dialogueKey is null ? "" : $"{dialogueKey}:{dialogueLine}",
+            Map.Id, Map.Size, treasures.TryGetValue(owner, out var found) ? found.ToArray() : []);
     }
 
     public const double ShrineVision = 24;
@@ -439,19 +454,19 @@ public sealed partial class Match
     // Vision is shared by the allied team: the shrine plus every living allied unit and building.
     private VisionView[] Vision()
     {
-        var sources = new List<VisionView>(units.Count + 1) { new(13, 13, ShrineVision) };
+        var sources = new List<VisionView>(units.Count + 1) { new(Layout.AllyBase, Layout.AllyBase, ShrineVision) };
         foreach (var u in units)
             if (u.Team == 0 && u.Health > 0) sources.Add(new(u.X, u.Z, VisionRadius(u.Kind, u.BuildTicks >= ConstructionTicks) * Atmosphere.SightFactor(Tick)));
         return sources.ToArray();
     }
 
     // Within radius and not hidden behind a ruin. Outposts are low and never block sight.
-    private static bool Sees(VisionView[] vision, double x, double z)
+    private bool Sees(VisionView[] vision, double x, double z)
     {
         foreach (var source in vision)
         {
             var dx = x - source.X; var dz = z - source.Z;
-            if (dx * dx + dz * dz <= source.Radius * source.Radius && NavigationMap.Rts.ClearSegment(new(source.X, source.Z), new(x, z), 0)) return true;
+            if (dx * dx + dz * dz <= source.Radius * source.Radius && sightTerrain.ClearSegment(new(source.X, source.Z), new(x, z), 0)) return true;
         }
         return false;
     }
@@ -506,11 +521,13 @@ public sealed partial class Match
         if (target.Invulnerable) return;
         target.Health -= target.GuardTicks > 0 ? damage * .5 : damage;
         target.LastHitTeam = team;
+        // Neutrals remember being hit: wildlife fights back and a creep wakes its camp.
+        if (target.Kind is "creep" or "wild") target.ProvokedTicks = Math.Max(target.ProvokedTicks, 80);
     }
 
     private void GrantExperience(Unit dead)
     {
-        var amount = dead.Kind switch { "tower" => 100, "champion" => 60, _ => 20 };
+        var amount = dead.Kind switch { "tower" => 100, "champion" => 60, "creep" => Catalog.Creep(dead.Model)?.Experience ?? 20, _ => 20 };
         foreach (var hero in units)
         {
             if (hero.Kind != "hero" || hero.Health <= 0 || (dead.Kind != "tower" && Distance(hero, dead) > 25)) continue;
@@ -545,14 +562,16 @@ public sealed partial class Match
 
     public bool CanPlaceOutpost(double x, double z)
     {
-        if (Mode != GameMode.Rts || !double.IsFinite(x) || !double.IsFinite(z) || x < 7 || x > 93 || z < 7 || z > 93 || !IsExplored(x, z)) return false;
-        if (Distance(x, z, 13, 13) < 13 || Distance(x, z, 13, 13) > 55) return false;
+        if (Mode != GameMode.Rts || !double.IsFinite(x) || !double.IsFinite(z) || x < 7 || x > Map.Size - 7 || z < 7 || z > Map.Size - 7 || !IsExplored(x, z)) return false;
+        var fromBase = Distance(x, z, Layout.AllyBase, Layout.AllyBase);
+        if (fromBase < 13 || fromBase > Layout.OutpostReach) return false;
         if (navigation.Obstacles.Any(o => Math.Abs(x - o.X) <= o.Width / 2 + 5 && Math.Abs(z - o.Z) <= o.Depth / 2 + 5)) return false;
         if (resources.Any(r => Distance(x, z, r.X, r.Z) < 7)) return false;
         // Reserve recruitment and second-player arrival points, including navigation clearance.
-        MapPoint[] spawns = [new(17, 20), new(20, 18), new(29, 24)];
+        var spawns = Layout.ReservedSpawns;
         if (spawns.Any(p => Math.Abs(x - p.X) <= 5 && Math.Abs(z - p.Z) <= 5)) return false;
-        return !units.Any(u => u.Health > 0 && Math.Abs(x - u.X) <= (u.Kind == "outpost" ? 8 : 5) && Math.Abs(z - u.Z) <= (u.Kind == "outpost" ? 8 : 5));
+        // Wildlife steps aside for a new building (see RebuildNavigation); everything else blocks the site.
+        return !units.Any(u => u.Health > 0 && u.Kind != "wild" && Math.Abs(x - u.X) <= (u.Kind == "outpost" ? 8 : 5) && Math.Abs(z - u.Z) <= (u.Kind == "outpost" ? 8 : 5));
     }
 
     private void AdvanceWorker(Unit worker)
@@ -585,7 +604,7 @@ public sealed partial class Match
         if (worker.Cargo > 0)
         {
             // Recompute the nearest surviving depot, so a destroyed outpost cannot strand cargo.
-            var depot = new MapPoint(13, 13);
+            var depot = new MapPoint(Layout.AllyBase, Layout.AllyBase);
             var nearest = Distance(worker.X, worker.Z, depot.X, depot.Z);
             foreach (var outpost in units.Where(u => u.Kind == "outpost" && u.Health > 0 && u.BuildTicks == ConstructionTicks))
             {
@@ -650,7 +669,7 @@ public sealed partial class Match
             return true;
         }
         if (!double.IsFinite(command.X) || !double.IsFinite(command.Z)) return false;
-        var destination = new MapPoint(Math.Clamp(command.X, 4, 96), Math.Clamp(command.Z, 4, 96));
+        var destination = new MapPoint(Math.Clamp(command.X, MapLayout.Margin, Layout.Max), Math.Clamp(command.Z, MapLayout.Margin, Layout.Max));
         if (!navigation.IsWalkable(destination)) return false;
         var plans = new List<(Unit Unit, MapPoint Goal, MapPoint[] Route)>();
         // Stable ID ordering keeps the formation identical regardless of UI selection order.
@@ -676,13 +695,24 @@ public sealed partial class Match
     }
 
     // Low outposts block walking, not ranged attacks; otherwise attackers cannot hit their center.
-    private bool CanSee(Unit a, Unit b) => (Mode == GameMode.Rts ? NavigationMap.Rts : navigation).ClearSegment(new(a.X, a.Z), new(b.X, b.Z), 0);
+    // Water does not block sight; in Adventure the cave walls and the sealed door do.
+    private bool CanSee(Unit a, Unit b) => (Mode == GameMode.Adventure ? navigation : sightTerrain).ClearSegment(new(a.X, a.Z), new(b.X, b.Z), 0);
 
     private void RebuildNavigation()
     {
-        navigation = new NavigationMap(NavigationMap.Rts.Obstacles.Concat(
-            units.Where(u => u.Kind == "outpost" && u.Health > 0).Select(u => new ObstacleView(u.X, u.Z, 6, 6))));
+        navigation = new NavigationMap(terrain.Obstacles.Concat(
+            units.Where(u => u.Kind == "outpost" && u.Health > 0).Select(u => new ObstacleView(u.X, u.Z, 6, 6, "outpost"))), Map.Size);
         foreach (var unit in units) { unit.Route = []; unit.RouteIndex = 0; }
+        // An animal standing where a foundation was laid is nudged to the nearest open ground around it.
+        foreach (var animal in units.Where(u => u.Kind == "wild" && u.Health > 0 && !navigation.IsWalkable(new(u.X, u.Z))))
+            for (var step = 1; step <= 12 && !navigation.IsWalkable(new(animal.X, animal.Z)); step++)
+                for (var k = 0; k < 8; k++)
+                {
+                    var spot = new MapPoint(animal.X + Math.Cos(k * Math.PI / 4) * step, animal.Z + Math.Sin(k * Math.PI / 4) * step);
+                    if (!navigation.IsWalkable(spot)) continue;
+                    animal.X = animal.TargetX = spot.X; animal.Z = animal.TargetZ = spot.Z;
+                    break;
+                }
     }
 
     private static void AssignConstruction(Unit worker, Unit site)
@@ -727,7 +757,8 @@ public sealed partial class Match
         for (var lane = 0; lane < (Mode == GameMode.Moba ? 3 : 2); lane++)
         {
             if (units.Count >= MaxUnits) return;
-            var unit = Spawn(-1, "soldier", team, team == 0 ? 24 : 76, (team == 0 ? 24 : 76) + lane * 2, 75, 9, team == 0 ? "#d4b478" : "#d17791");
+            var (x, z) = Layout.WaveSpawn(team, lane);
+            var unit = Spawn(-1, "soldier", team, x, z, 75, 9, team == 0 ? "#d4b478" : "#d17791");
             SetLane(unit, lane);
         }
     }
@@ -755,7 +786,8 @@ public sealed partial class Match
         else unit.Route = [];
         var dx = waypoint.X - unit.X; var dz = waypoint.Z - unit.Z;
         var distance = Math.Sqrt(dx * dx + dz * dz);
-        var speed = unit.Kind switch { "hero" => 12, "champion" => 8, "worker" => 7, "boss" => 3, _ => 5 } * (1 + unit.SpeedBonus + (unit.BoostTicks > 0 ? .6 : 0)) * StepSeconds;
+        var speed = (unit.SpeedOverride > 0 ? unit.SpeedOverride
+            : unit.Kind switch { "hero" => 12, "champion" => 8, "worker" => 7, "boss" => 3, _ => 5 } * (1 + unit.SpeedBonus + (unit.BoostTicks > 0 ? .6 : 0))) * StepSeconds;
         if (distance < .1) { unit.X = waypoint.X; unit.Z = waypoint.Z; return; }
         var step = Math.Min(speed, distance) / distance;
         var next = new MapPoint(unit.X + dx * step, unit.Z + dz * step);
@@ -768,7 +800,8 @@ public sealed partial class Match
         public int Id, Owner, Team, Damage;
         public string Kind = "", Color = "", Model = "";
         public double X, Z, TargetX, TargetZ, Health, MaxHealth, AttackCooldown, LaneX, LaneZ, OrderX, OrderZ, RouteX, RouteZ, HomeX, HomeZ, SpeedBonus;
-        public int LastHitTeam = -1, GuardTicks, BoostTicks;
+        public int LastHitTeam = -1, GuardTicks, BoostTicks, CampId, ProvokedTicks;
+        public double SpeedOverride;
         public bool Retreating, Hunter, Invulnerable;
         public UnitOrder Order;
         public MapPoint[] Route = [];

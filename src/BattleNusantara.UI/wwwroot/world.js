@@ -1,20 +1,43 @@
 import * as THREE from './vendor/three.module.js';
 import { GLTFLoader } from './vendor/GLTFLoader.js';
 import { clone as cloneSkinned } from './vendor/SkeletonUtils.js';
-import { mergeGeometries } from './vendor/BufferGeometryUtils.js';
+import { buildLandscape, dressObstacles, layout, clearSway, SEA_LEVEL, APRON } from './terrain.js';
+import { Effects, PostProcessing, softwareRenderer } from './effects.js';
+import { Life } from './life.js';
+import { Soundscape } from './audio.js';
 
 let runtime;
-const defaults = { language: 'id', quality: 'high', reducedMotion: false, volume: 20, cinematics: true, voices: true };
-// Which character model a unit uses: the snapshot names heroes, champions, NPCs and bosses; the rest follow their kind.
+const defaults = { language: 'id', quality: 'high', reducedMotion: false, volume: 50, cinematics: true, voices: true };
+// Which character model a unit uses: the snapshot names heroes, champions, NPCs, bosses, creeps and wildlife; the rest follow their kind.
 const kindModels = { guardian: 'guardian', warden: 'warden', spirit: 'spirit', worker: 'worker' };
 const modelFor = unit => unit.model || (unit.kind === 'soldier' ? (unit.team === 0 ? 'prajurit' : 'prajurit-kalatidha') : kindModels[unit.kind]) || null;
 const propKinds = { tower: 'tower', outpost: 'outpost', relic: 'relic', artifact: 'artifact', flotsam: 'flotsam' };
+// Loot on the ground (Catalog.Loot): the chest, a legendary mustika, the major heirlooms, or a minor charm.
+const lootProp = model => model === 'peti' ? 'chest' : model === 'mustika' ? 'loot_legend' : ['keris-luk', 'zirah-sisik', 'terompah-kilat'].includes(model) ? 'loot_major' : 'loot_minor';
+// Jungle creeps stand taller the stronger they are; animals keep their own proportions.
+const creepSizes = { tuyul: 1, 'siluman-kera': 1.25, 'siluman-macan': 1.4, 'siluman-buaya': 1.4, genderuwo: 1.9, banaspati: 2 };
+const animalScales = { kancil: 2.1, kerbau: 2.5, 'babi-hutan': 2.5, 'kera-pencuri': 2.5, ayam: 1.8 };
+const animalVoices = { 'babi-hutan': 'boar', 'kera-pencuri': 'monkey', kerbau: 'buffalo', ayam: 'chicken' };
+// The full characters for the high quality; a decimated set (assets/blender/create_lods.py) for power saving.
+const characterFiles = { high: 'characters.glb', low: 'characters-lod.glb' };
+const characterSet = options => options.quality === 'low' ? 'low' : 'high';
 // Ultimate effects follow the hero's ultimate (Catalog.cs): chain lightning, leap, the southern wave, or a burst.
 const ultimateEffects = { bledhek: 'chain', 'rara-angkasa': 'leap', 'nyi-roro-kidul': 'wave' };
+const ultimateSounds = { chain: 'lightning', leap: 'shockwave', wave: 'wave', burst: 'magic' };
+// Messages from the simulation that deserve a sound (Match.cs, Match.Neutrals.cs, Match.Adventure.cs).
+const cues = [[/^Kamp /, 'camp'], [/^Kera pencuri/, 'monkey'], [/^Emas curian/, 'coin'], [/didapat!/, 'loot'], [/^Tugas/, 'quest'], [/^Prasasti ditemukan/, 'quest'],
+  [/^Serpihan kapal/, 'coin'], [/Naga Basuki/, 'gong'], [/^Pos siap/, 'build'], [/^Fondasi ditempatkan/, 'build'], [/dibeli/, 'coin']];
+// The title screen: the shrine of Borobudur Quantum in a valley between a volcano, mountains and the sea.
+const MENU_MAP = {
+  id: 'menu', mode: -1, size: 100, theme: 'valley', obstacles: [], resources: [], camps: [],
+  regions: [{ biome: 'subur', x: 26, z: 70, radius: 30 }, { biome: 'hutan', x: 8, z: 30, radius: 24 }, { biome: 'subur', x: 82, z: 86, radius: 24 }, { biome: 'sabana', x: 88, z: 22, radius: 20 }, { biome: 'hutan', x: 40, z: 6, radius: 18 }],
+  edges: ['vulkan', 'laut', 'laut', 'gunung'], paths: [[63, 48, 100, 100], [63, 48, 22, 74], [63, 48, 63, 0]], clear: [[63, 48, 24]], village: [20, 70]
+};
+
 export function loadSettings() {
   try {
     const saved = JSON.parse(localStorage.getItem('nusantara.settings') || '{}');
-    return { language: saved.language === 'en' ? 'en' : 'id', quality: saved.quality === 'low' ? 'low' : 'high', reducedMotion: Boolean(saved.reducedMotion || matchMedia('(prefers-reduced-motion: reduce)').matches), volume: Number.isFinite(saved.volume) ? Math.max(0, Math.min(100, saved.volume)) : 20, cinematics: saved.cinematics !== false, voices: saved.voices !== false };
+    return { language: saved.language === 'en' ? 'en' : 'id', quality: saved.quality === 'low' ? 'low' : 'high', reducedMotion: Boolean(saved.reducedMotion || matchMedia('(prefers-reduced-motion: reduce)').matches), volume: Number.isFinite(saved.volume) ? Math.max(0, Math.min(100, saved.volume)) : defaults.volume, cinematics: saved.cinematics !== false, voices: saved.voices !== false };
   } catch { return { ...defaults }; }
 }
 // A solo Adventure save lives in this browser profile only. Oversized or unreadable data is treated as absent.
@@ -38,8 +61,8 @@ export function saveSession(server, token) {
 // Last rendered frame, for the performance budget checks in docs/PERFORMANCE.md.
 export function stats() {
   const r = runtime; if (!r?.ready) return null;
-  const info = r.renderer.info;
-  return { calls: info.render.calls, triangles: info.render.triangles, geometries: info.memory.geometries, textures: info.memory.textures, units: r.units.size, frameMs: r.frameMs || 0, animated: r.animated || 0, weather: r.sky.weather, rain: r.rain, daylight: r.daylight, combat: r.combat, cinematic: r.intro ? r.intro.kind : 'off', audio: r.audio ? r.audio.state : 'off', models: r.modelled || 0, corpses: r.corpses.length, effects: r.effects.length, voice: r.voiceKey || '', music: r.musicStep || 0 };
+  const info = r.renderer.info, decor = r.landscape ? Object.values(r.landscape.counts).reduce((a, b) => a + b, 0) : 0;
+  return { calls: r.frameCalls || 0, triangles: r.frameTriangles || 0, geometries: info.memory.geometries, textures: info.memory.textures, units: r.units.size, frameMs: r.frameMs || 0, animated: r.animated || 0, weather: r.sky.weather, rain: r.rain, daylight: r.daylight, combat: r.combat, cinematic: r.intro ? r.intro.kind : 'off', audio: r.audio.state, models: r.modelled || 0, corpses: r.corpses.length, effects: r.effects.length + r.fx.active, voice: r.voiceKey || '', music: r.audio.mode, map: r.landscape?.id || '', size: r.size, decor, life: r.life?.count || 0, post: !!r.post, zoom: r.view.zoom, neutrals: r.neutrals || 0, particles: r.fx.emitted, characters: r.templates === r.templateSets?.low ? 'lod' : 'full' };
 }
 // Client coordinates of a ground position, for automated tests that click the arena.
 export function screenPoint(x, z) {
@@ -51,114 +74,108 @@ export function settings(value) {
   try { localStorage.setItem('nusantara.settings', JSON.stringify(value)); } catch { /* Storage can be disabled in private profiles. */ }
   document.documentElement.lang = value.language;
   document.documentElement.dataset.reducedMotion = String(value.reducedMotion);
-  if (runtime) {
-    runtime.options = value;
-    runtime.renderer.setPixelRatio(value.quality === 'low' ? 1 : Math.min(devicePixelRatio, 1.75));
-    if (runtime.gain) runtime.gain.gain.setTargetAtTime(value.volume / 3500, runtime.audio.currentTime, .2);
-  }
+  const r = runtime; if (!r) return;
+  const qualityChanged = r.options?.quality !== value.quality;
+  r.options = value;
+  r.renderer.setPixelRatio(value.quality === 'low' ? 1 : Math.min(devicePixelRatio, 1.75));
+  r.audio.setVolume(value.volume);
+  // Raising the volume from zero is itself a gesture, so sound can start right away.
+  if (value.volume > 0 && r.gestured) r.audio.start(value.volume);
+  if (r.voice) r.voice.volume = Math.min(1, value.volume / 50);
+  r.configure?.();
+  if (qualityChanged && r.kit) { applyMap(r, true); ensureCharacters(r); }
+}
+/** The map on screen: a MapDefinition from Maps.cs, or null for the title screen. Rebuilds the landscape when it changes. */
+export function setMap(definition) {
+  const r = runtime; if (!r) return;
+  r.mapDef = definition || null;
+  if (r.kit) applyMap(r);
 }
 export async function mount(element, reference, options) {
   dispose();
   const scene = new THREE.Scene();
   scene.background = new THREE.Color('#19323e');
   scene.fog = new THREE.FogExp2('#19323e', .0035);
-  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.setPixelRatio(Math.min(devicePixelRatio, 1.75));
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.3;
+  // Several passes draw each frame once bloom is on; the counters are reset by hand so stats() sees the whole frame.
+  renderer.info.autoReset = false;
   element.append(renderer.domElement);
-  const camera = new THREE.PerspectiveCamera(39, 1, .1, 600);
-  const r = runtime = { element, reference, scene, renderer, camera, options, units: new Map(), resourceMarkers: new Map(), state: null, owner: 0, mixers: [], scenery: new THREE.Group(), battle: new THREE.Group(), ruins: new THREE.Group(), story: new THREE.Group(), disposed: false, sky: { weather: 'clear', daylight: 1 }, rain: 0, mist: 0, daylight: 1, swell: .5, combat: 0, combatTarget: 0, flash: 0, intro: null, tintMaterials: new Map(), corpses: [], effects: [], templates: new Map(), props: new Map(), lastCooldown: 0 };
+  const camera = new THREE.PerspectiveCamera(39, 1, .1, 900);
+  const r = runtime = { element, reference, scene, renderer, camera, options, units: new Map(), resourceMarkers: new Map(), state: null, owner: 0, mixers: [], scenery: new THREE.Group(), battle: new THREE.Group(), story: new THREE.Group(), disposed: false, sky: { weather: 'clear', daylight: 1 }, rain: 0, mist: 0, daylight: 1, swell: .5, combat: 0, combatTarget: 0, flash: 0, intro: null, tintMaterials: new Map(), corpses: [], effects: [], templates: new Map(), props: new Map(), lastCooldown: 0, size: 100, view: { zoom: 1, pan: new THREE.Vector3(), keys: new Set(), drag: null }, look: new THREE.Vector3(43, 9, 45), mapDef: null };
+  r.audio = new Soundscape(new URL('./audio/', import.meta.url).href);
+  r.fx = new Effects(scene);
+  r.software = softwareRenderer(renderer);
   settings(options);
-  scene.add(r.scenery, r.battle, r.ruins, r.story);
+  scene.add(r.scenery, r.battle, r.story);
   const hemisphere = new THREE.HemisphereLight('#b9e1e0', '#30454b', 2.6); scene.add(hemisphere);
-  const sun = new THREE.DirectionalLight('#ffe4b0', 4.3);
-  sun.position.set(30, 100, 50); sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);
-  Object.assign(sun.shadow.camera, { left: -90, right: 90, top: 90, bottom: -90, far: 250 });
-  sun.shadow.bias = -.001;
-  scene.add(sun);
+  const sun = r.sun = new THREE.DirectionalLight('#ffe4b0', 4.3);
+  sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048); sun.shadow.bias = -.0008; sun.shadow.normalBias = .04;
+  scene.add(sun, sun.target);
   const rim = new THREE.DirectionalLight('#70bcd8', 3); rim.position.set(100, 40, -60); scene.add(rim);
-  const stone = new THREE.MeshStandardMaterial({ color: '#3d5c60', roughness: .95 });
-  const ground = new THREE.Mesh(new THREE.BoxGeometry(116, 3, 116), stone); ground.position.set(50, -2, 50); ground.receiveShadow = true; scene.add(ground);
-  // Ocean: a swell animated in the vertex shader, so the waves cost no CPU time. `swell` rises with the weather.
-  const waterUniforms = { uTime: { value: 0 }, uSwell: { value: .5 } };
-  const waterMaterial = new THREE.MeshStandardMaterial({ color: '#1d5360', metalness: .6, roughness: .25 });
+  // The sea around every island: a swell animated in the vertex shader; colour and surf come from the sea floor depth
+  // that the landscape writes into a small texture, so shallows glow turquoise and foam gathers on the beaches.
+  r.ocean = { uTime: { value: 0 }, uSwell: { value: .5 }, uShore: { value: null }, uShoreOrigin: { value: new THREE.Vector2(-APRON, -APRON) }, uShoreSize: { value: 240 } };
+  const waterMaterial = new THREE.MeshStandardMaterial({ color: '#1d5360', metalness: .2, roughness: .22 });
   waterMaterial.onBeforeCompile = shader => {
-    Object.assign(shader.uniforms, waterUniforms);
-    shader.vertexShader = 'uniform float uTime;\nuniform float uSwell;\n' + shader.vertexShader
+    Object.assign(shader.uniforms, r.ocean);
+    shader.vertexShader = 'uniform float uTime;\nuniform float uSwell;\nvarying vec2 vSea;\n' + shader.vertexShader
       .replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\n  float waveA = position.x * .09 + uTime * .9, waveB = position.y * .07 - uTime * .7, waveC = (position.x + position.y) * .21 + uTime * 1.6;\n  objectNormal = normalize(vec3(-(cos(waveA) * .09 + cos(waveC) * .063) * uSwell, -(cos(waveB) * .07 + cos(waveC) * .063) * uSwell, 1.0));')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\n  transformed.z += (sin(waveA) + sin(waveB) + sin(waveC) * .3) * uSwell;');
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\n  vSea = (modelMatrix * vec4(transformed, 1.0)).xz;\n  transformed.z += (sin(waveA) + sin(waveB) + sin(waveC) * .3) * uSwell * .6;');
+    shader.fragmentShader = 'uniform float uTime;\nuniform sampler2D uShore;\nuniform vec2 uShoreOrigin;\nuniform float uShoreSize;\nvarying vec2 vSea;\nfloat seaFoam = 0.0;\n' + shader.fragmentShader
+      .replace('#include <color_fragment>', `#include <color_fragment>
+  vec2 shoreUv = (vSea - uShoreOrigin) / uShoreSize;
+  float inside = step(0.0, shoreUv.x) * step(shoreUv.x, 1.0) * step(0.0, shoreUv.y) * step(shoreUv.y, 1.0);
+  float depth = mix(10.0, texture2D(uShore, shoreUv).r * 12.0 - 2.0, inside);
+  diffuseColor.rgb = mix(vec3(.03, .38, .34), vec3(.006, .05, .085), smoothstep(.2, 4.2, depth));
+  float surf = sin(uTime * 1.7 - depth * 6.0 + vSea.x * .21 + vSea.y * .17) * .5 + .5;
+  seaFoam = clamp((1.0 - smoothstep(.0, 1.2, depth)) * (.45 + .55 * surf) + (1.0 - smoothstep(.0, .35, depth)) * .5, 0.0, 1.0);
+  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(.86, .92, .9), seaFoam * .8);`)
+      .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n  roughnessFactor = mix(roughnessFactor, .85, seaFoam);');
   };
-  const water = new THREE.Mesh(new THREE.PlaneGeometry(700, 700, 96, 96), waterMaterial); water.rotation.x = -Math.PI / 2; water.position.set(50, -4, 50); scene.add(water);
-  // The rain box reaches from the arena up to the camera, so streaks fill the view.
-  // Shoreline foam where the island meets the sea: a square ring that breathes with the swell.
-  const foam = new THREE.Mesh(new THREE.RingGeometry(58 * Math.SQRT2, 63 * Math.SQRT2, 4, 1), new THREE.MeshBasicMaterial({ color: '#d9eef0', transparent: true, opacity: .35, depthWrite: false, side: THREE.DoubleSide }));
-  foam.rotation.set(-Math.PI / 2, 0, Math.PI / 4); foam.position.set(50, -3.85, 50); scene.add(foam);
+  const water = r.water = new THREE.Mesh(new THREE.PlaneGeometry(2000, 2000, 100, 100), waterMaterial); water.rotation.x = -Math.PI / 2; water.position.set(50, SEA_LEVEL, 50); water.name = 'sea'; scene.add(water);
   // Rain rings on the sea around the island, recycled; they appear only while it rains.
   const ripples = new THREE.InstancedMesh(new THREE.RingGeometry(.6, .85, 16), new THREE.MeshBasicMaterial({ color: '#cfe6ea', transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide }), 48);
   const rippleAge = new Float32Array(48), rippleSpot = new Float32Array(96), rippleMatrix = new THREE.Object3D();
-  for (let i = 0; i < 48; i++) { rippleAge[i] = i / 48; const angle = i * 2.39996, radius = 64 + (i * 13.7) % 26; rippleSpot[i * 2] = 50 + Math.cos(angle) * radius; rippleSpot[i * 2 + 1] = 50 + Math.sin(angle) * radius; }
+  for (let i = 0; i < 48; i++) rippleAge[i] = i / 48;
   ripples.frustumCulled = false; scene.add(ripples);
-  // A wreck on the western reef: something happened here before the player arrived.
-  const wreckMaterial = new THREE.MeshStandardMaterial({ color: '#4a3a2c', roughness: 1 });
-  const wreck = new THREE.Group();
-  const hull = new THREE.Mesh(new THREE.BoxGeometry(5, 4, 16), wreckMaterial); hull.rotation.set(.1, 0, .5); wreck.add(hull);
-  const mast = new THREE.Mesh(new THREE.CylinderGeometry(.3, .4, 15, 6), wreckMaterial); mast.position.set(2.5, 6, -1); mast.rotation.z = -.75; wreck.add(mast);
-  const yard = new THREE.Mesh(new THREE.BoxGeometry(.4, .4, 8), wreckMaterial); yard.position.set(5, 9, -1); yard.rotation.z = -.75; wreck.add(yard);
-  wreck.position.set(-14, -3.2, 66); wreck.rotation.y = .5; scene.add(wreck);
-  const tileMaterial = new THREE.MeshStandardMaterial({ color: '#7b8170', roughness: .9 });
-  const tileGeometry = new THREE.BoxGeometry(3.8, .15, 3.8);
-  const paths = new THREE.InstancedMesh(tileGeometry, tileMaterial, 125);
-  let tile = 0; const dummy = new THREE.Object3D();
-  for (let i = 0; i < 25; i++) {
-    for (const [x, z] of [[i * 3 + 13, i * 3 + 13], [18, 13 + i * 3], [13 + i * 3, 18], [87, 13 + i * 3], [13 + i * 3, 87]]) {
-      dummy.position.set(x, -.38, z); dummy.rotation.y = i * .05; dummy.updateMatrix(); paths.setMatrixAt(tile++, dummy.matrix);
-    }
-  }
-  paths.receiveShadow = true; scene.add(paths);
-  // Deterministic landscape decorations, shared geometry and instanced draw calls.
-  const rocks = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(1.8, 0), new THREE.MeshStandardMaterial({ color: '#385054', roughness: 1 }), 80);
-  const trees = new THREE.InstancedMesh(new THREE.ConeGeometry(2.6, 10, 5), new THREE.MeshStandardMaterial({ color: '#244d47', roughness: 1 }), 80);
-  for (let i = 0; i < 80; i++) {
-    const angle = i * 2.39996; const radius = 57 + Math.sin(i * 7.2) * 5;
-    const x = 50 + Math.cos(angle) * radius, z = 50 + Math.sin(angle) * radius;
-    dummy.position.set(x, .2, z); dummy.scale.setScalar(.6 + (i % 5) / 4); dummy.rotation.set(0, angle, .2); dummy.updateMatrix(); rocks.setMatrixAt(i, dummy.matrix);
-    dummy.position.set(x + 2, 3, z - 2); dummy.rotation.set(0, angle, 0); dummy.updateMatrix(); trees.setMatrixAt(i, dummy.matrix);
-  }
-  rocks.castShadow = true; trees.castShadow = true; scene.add(rocks, trees);
-  const shrine = await new GLTFLoader().loadAsync(new URL('./models/quantum-shrine.glb', import.meta.url).href);
-  if (r.disposed) { release(shrine.scene); return; }
+  const loader = new GLTFLoader(), url = name => new URL(`./models/${name}`, import.meta.url).href;
+  const files = ['quantum-shrine.glb', characterFiles[characterSet(options)], 'naga.glb', 'props.glb', 'environment.glb', 'animals.glb'];
+  const loaded = await Promise.all(files.map(name => loader.loadAsync(url(name))));
+  if (r.disposed) { loaded.forEach(g => release(g.scene, true)); return; }
+  const [shrine, characters, naga, props, environment, animals] = loaded;
   shrine.scene.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
   const centerpiece = shrine.scene;
-  r.ruinTemplate = centerpiece;
   centerpiece.position.set(63, 0, 48); centerpiece.scale.setScalar(4); centerpiece.rotation.y = -.2;
   r.scenery.add(centerpiece);
-  const halo = new THREE.Mesh(new THREE.TorusGeometry(12, .14, 8, 100), new THREE.MeshBasicMaterial({ color: '#d4b478', transparent: true, opacity: .8 }));
+  const halo = new THREE.Mesh(new THREE.TorusGeometry(12, .14, 8, 100), new THREE.MeshBasicMaterial({ color: new THREE.Color('#d4b478').multiplyScalar(1.6), transparent: true, opacity: .8 }));
   halo.position.set(63, 22, 48); halo.rotation.y = .7; r.scenery.add(halo);
-  const innerHalo = new THREE.Mesh(new THREE.TorusGeometry(10.8, .06, 6, 100), new THREE.MeshBasicMaterial({ color: '#83c9ba', transparent: true, opacity: .5 }));
+  const innerHalo = new THREE.Mesh(new THREE.TorusGeometry(10.8, .06, 6, 100), new THREE.MeshBasicMaterial({ color: new THREE.Color('#83c9ba').multiplyScalar(1.6), transparent: true, opacity: .5 }));
   innerHalo.position.copy(halo.position); innerHalo.rotation.copy(halo.rotation); r.scenery.add(innerHalo);
   const mixer = new THREE.AnimationMixer(centerpiece);
   shrine.animations.forEach(a => mixer.clipAction(a).play()); r.mixers.push(mixer);
-  const loader = new GLTFLoader(), url = name => new URL(`./models/${name}`, import.meta.url).href;
-  const [characters, naga, props] = await Promise.all([loader.loadAsync(url('characters.glb')), loader.loadAsync(url('naga.glb')), loader.loadAsync(url('props.glb'))]);
-  if (r.disposed) { [characters, naga, props].forEach(g => release(g.scene, true)); return; }
-  prepareModels(r, characters, naga, props);
-  for (const [x, z, color] of [[13, 13, '#7ce5cb'], [87, 87, '#da80aa']]) {
-    const copy = centerpiece.clone(); copy.position.set(x, 0, z); copy.scale.setScalar(1.2); r.battle.add(copy);
-    const beacon = new THREE.Mesh(new THREE.CylinderGeometry(.5, 1, 20, 8, 1, true), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: .23, side: THREE.DoubleSide, depthWrite: false })); beacon.position.set(x, 10, z); r.battle.add(beacon);
-  }
+  prepareModels(r, characterSet(options), characters, naga, props, environment, animals);
+  r.characterScenes.push(shrine.scene);
+  // The two shrines of a match; their places follow the map size (applyMap).
+  r.bases = [['#7ce5cb', 0], ['#da80aa', 1]].map(([color]) => {
+    const copy = centerpiece.clone(); copy.scale.setScalar(1.2); r.battle.add(copy);
+    const beacon = new THREE.Mesh(new THREE.CylinderGeometry(.5, 1, 20, 8, 1, true), new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(1.4), transparent: true, opacity: .23, side: THREE.DoubleSide, depthWrite: false })); r.battle.add(beacon);
+    return { copy, beacon };
+  });
   r.battle.visible = false;
+  // Golden motes drifting around wherever the camera looks.
   const positions = new Float32Array(160 * 3);
-  for (let i = 0; i < positions.length; i += 3) { positions[i] = (i * 7.31) % 115; positions[i + 1] = 3 + (i * .71) % 35; positions[i + 2] = (i * 3.77) % 110; }
+  for (let i = 0; i < positions.length; i += 3) { positions[i] = (i * 7.31) % 115 - 57; positions[i + 1] = 3 + (i * .71) % 35; positions[i + 2] = (i * 3.77) % 110 - 55; }
   const particlesGeometry = new THREE.BufferGeometry(); particlesGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  const particles = new THREE.Points(particlesGeometry, new THREE.PointsMaterial({ color: '#e5c58a', size: .23, transparent: true, opacity: .65 })); scene.add(particles);
-  // Rain: line segments recycled inside a box over the arena. The draw range follows the rain level.
+  const particles = new THREE.Points(particlesGeometry, new THREE.PointsMaterial({ color: '#e5c58a', size: .23, transparent: true, opacity: .65, depthWrite: false })); scene.add(particles);
+  // Rain: line segments recycled inside a box that follows the camera. The draw range follows the rain level.
   const drops = 1400, rainPositions = new Float32Array(drops * 6);
-  for (let i = 0; i < drops; i++) { rainPositions[i * 6] = -10 + (i * 37.7) % 160; rainPositions[i * 6 + 1] = (i * 13.3) % 120; rainPositions[i * 6 + 2] = -10 + (i * 91.1) % 180; }
+  for (let i = 0; i < drops; i++) { rainPositions[i * 6] = -80 + (i * 37.7) % 160; rainPositions[i * 6 + 1] = (i * 13.3) % 120; rainPositions[i * 6 + 2] = -90 + (i * 91.1) % 180; }
   const rainGeometry = new THREE.BufferGeometry(); rainGeometry.setAttribute('position', new THREE.BufferAttribute(rainPositions, 3));
   const rain = new THREE.LineSegments(rainGeometry, new THREE.LineBasicMaterial({ color: '#b9d6e2', transparent: true, opacity: 0, depthWrite: false }));
   rain.frustumCulled = false; rain.visible = false; scene.add(rain);
@@ -176,9 +193,28 @@ export async function mount(element, reference, options) {
   r.fogCanvas = document.createElement('canvas'); r.seenCanvas = document.createElement('canvas');
   r.fogCanvas.width = r.fogCanvas.height = r.seenCanvas.width = r.seenCanvas.height = 128;
   r.fogTexture = new THREE.CanvasTexture(r.fogCanvas); r.fogTexture.colorSpace = THREE.SRGBColorSpace;
-  r.fog = new THREE.Mesh(new THREE.PlaneGeometry(100, 100), new THREE.MeshBasicMaterial({ map: r.fogTexture, transparent: true, depthWrite: false }));
-  r.fog.rotation.x = -Math.PI / 2; r.fog.position.set(50, .15, 50); r.fog.visible = false; scene.add(r.fog);
+  r.fog = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ map: r.fogTexture, transparent: true, depthWrite: false }));
+  r.fog.rotation.x = -Math.PI / 2; r.fog.visible = false; r.fog.renderOrder = 1; scene.add(r.fog);
+  r.projector = new THREE.Vector3();
+  // A sound placed in the world: panned by where it is on screen, quieter the farther it is from what the camera watches.
+  r.sound = (name, x, z, gain = 1, rate = 1) => {
+    let pan = 0, level = gain;
+    if (x !== undefined) {
+      r.projector.set(x, 1, z).project(camera);
+      pan = THREE.MathUtils.clamp(r.projector.x, -1, 1) * .85;
+      const off = Math.max(0, Math.abs(r.projector.x) - 1, Math.abs(r.projector.y) - 1);
+      const distance = Math.hypot(x - r.look.x, z - r.look.z), reach = r.size * .45 * r.view.zoom + 12;
+      level *= 1 / (1 + (distance / reach) ** 2) * (off > 0 ? Math.max(.12, 1 - off) : 1);
+    }
+    return r.audio.play(name, { pan, gain: level, rate });
+  };
   const ray = new THREE.Raycaster(), pointer = new THREE.Vector2(), plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), point = new THREE.Vector3();
+  const groundAt = (clientX, clientY, out) => {
+    const rect = renderer.domElement.getBoundingClientRect();
+    pointer.set((clientX - rect.left) / rect.width * 2 - 1, -(clientY - rect.top) / rect.height * 2 + 1);
+    ray.setFromCamera(pointer, camera);
+    return ray.ray.intersectPlane(plane, out);
+  };
   r.click = event => {
     if (!r.state || document.querySelector('.modal-backdrop')) return;
     const rect = renderer.domElement.getBoundingClientRect();
@@ -200,21 +236,35 @@ export async function mount(element, reference, options) {
         }
       }
     }
-    if (ray.ray.intersectPlane(plane, point) && point.x >= 4 && point.x <= 96 && point.z >= 4 && point.z <= 96) {
+    const max = r.size - 4;
+    if (ray.ray.intersectPlane(plane, point) && point.x >= 4 && point.x <= max && point.z >= 4 && point.z <= max) {
       cursor.position.set(point.x, .2, point.z); cursor.visible = true;
       reference.invokeMethodAsync('MoveTo', point.x, point.z).catch(() => {});
     }
   };
   // The overlay is pointer-transparent except for actual UI, keeping the arena clickable.
   // RTS left-button presses wait for release: a short press is a click, a drag past 8 px is a box selection.
+  // The middle button drags the camera.
   r.box = document.createElement('div'); r.box.className = 'selection-box'; r.box.style.display = 'none'; element.append(r.box);
   r.down = event => {
     r.endIntro();
+    if (event.button === 1 && r.state) {
+      event.preventDefault();
+      if (groundAt(event.clientX, event.clientY, point)) r.view.drag = { id: event.pointerId, start: point.clone(), pan: r.view.pan.clone() };
+      try { renderer.domElement.setPointerCapture(event.pointerId); } catch { /* Capture is optional. */ }
+      return;
+    }
     if (event.button !== 0 || event.pointerType === 'touch' || r.state?.mode !== 0 || r.attackMove || r.buildMode || document.querySelector('.modal-backdrop')) { r.click(event); return; }
     r.drag = { id: event.pointerId, x: event.clientX, y: event.clientY, active: false };
     try { renderer.domElement.setPointerCapture(event.pointerId); } catch { /* Capture is optional. */ }
   };
   r.dragMove = event => {
+    const pan = r.view.drag;
+    if (pan && event.pointerId === pan.id) {
+      // Keep the ground point that was grabbed under the pointer.
+      if (groundAt(event.clientX, event.clientY, point)) { r.view.pan.add(pan.start.clone().sub(point).setY(0)); clampView(r); }
+      return;
+    }
     const drag = r.drag; if (!drag || event.pointerId !== drag.id) return;
     if (!drag.active && Math.hypot(event.clientX - drag.x, event.clientY - drag.y) < 8) return;
     drag.active = true;
@@ -222,6 +272,7 @@ export async function mount(element, reference, options) {
     Object.assign(r.box.style, { display: 'block', left: `${Math.min(drag.x, event.clientX) - rect.left}px`, top: `${Math.min(drag.y, event.clientY) - rect.top}px`, width: `${Math.abs(event.clientX - drag.x)}px`, height: `${Math.abs(event.clientY - drag.y)}px` });
   };
   r.up = event => {
+    if (r.view.drag?.id === event.pointerId) { r.view.drag = null; return; }
     const drag = r.drag; if (!drag || event.pointerId !== drag.id) return;
     r.drag = null; r.box.style.display = 'none';
     if (!drag.active) { r.click(event); return; }
@@ -239,37 +290,47 @@ export async function mount(element, reference, options) {
     }
     reference.invokeMethodAsync('SelectUnits', ids, event.shiftKey).catch(() => {});
   };
-  r.dragCancel = event => { if (r.drag?.id === event.pointerId) { r.drag = null; r.box.style.display = 'none'; } };
+  r.dragCancel = event => { if (r.drag?.id === event.pointerId) { r.drag = null; r.box.style.display = 'none'; } if (r.view.drag?.id === event.pointerId) r.view.drag = null; };
   renderer.domElement.addEventListener('pointerdown', r.down);
   renderer.domElement.addEventListener('pointermove', r.dragMove);
   renderer.domElement.addEventListener('pointerup', r.up);
   renderer.domElement.addEventListener('pointercancel', r.dragCancel);
   r.hover = event => {
     if (!r.buildMode) return;
-    const rect = renderer.domElement.getBoundingClientRect();
-    pointer.set((event.clientX - rect.left) / rect.width * 2 - 1, -(event.clientY - rect.top) / rect.height * 2 + 1);
-    ray.setFromCamera(pointer, camera);
-    if (ray.ray.intersectPlane(plane, point)) { r.placement.position.set(point.x, .2, point.z); r.placement.visible = true; }
+    if (groundAt(event.clientX, event.clientY, point)) { r.placement.position.set(point.x, .2, point.z); r.placement.visible = true; }
   };
   renderer.domElement.addEventListener('pointermove', r.hover);
   r.contextMenu = event => event.preventDefault();
   renderer.domElement.addEventListener('contextmenu', r.contextMenu);
+  // The mouse wheel zooms the battle camera between a close look and the whole map.
+  r.wheel = event => {
+    if (!r.state || r.intro || document.querySelector('.modal-backdrop')) return;
+    event.preventDefault();
+    r.view.zoom = THREE.MathUtils.clamp(r.view.zoom * Math.exp(event.deltaY * .0012), .32, 1.25);
+  };
+  renderer.domElement.addEventListener('wheel', r.wheel, { passive: false });
   r.mapClick = event => {
     const map = event.target.closest?.('[data-tactical-map]');
     if (!map || !r.state || document.querySelector('.modal-backdrop')) return;
     const resourceId = event.target.getAttribute('data-resource-id');
     if (resourceId && !r.buildMode) { reference.invokeMethodAsync('GatherResource', Number(resourceId)).catch(() => {}); return; }
-    const rect = map.getBoundingClientRect();
-    const x = (event.clientX - rect.left) / rect.width * 100, z = (event.clientY - rect.top) / rect.height * 100;
-    if (x >= 4 && x <= 96 && z >= 4 && z <= 96) reference.invokeMethodAsync('MoveTo', x, z).catch(() => {});
+    const rect = map.getBoundingClientRect(), size = r.size;
+    const x = (event.clientX - rect.left) / rect.width * size, z = (event.clientY - rect.top) / rect.height * size;
+    if (x >= 4 && x <= size - 4 && z >= 4 && z <= size - 4) reference.invokeMethodAsync('MoveTo', x, z).catch(() => {});
   };
   r.element.parentElement.addEventListener('pointerdown', r.mapClick);
+  const arrows = { ArrowUp: 1, ArrowDown: 1, ArrowLeft: 1, ArrowRight: 1 };
   r.key = event => {
-    if (event.target.matches('input,select,textarea') || event.repeat) return;
+    if (event.target.matches('input,select,textarea')) return;
+    if (arrows[event.key] && r.state && !document.querySelector('.modal-backdrop')) { event.preventDefault(); r.view.keys.add(event.key); return; }
+    if (event.repeat) return;
     r.endIntro();
     // 4-6 recall a control group; Ctrl/Alt/Cmd + 4-6 save the current selection.
     const group = r.state && /^Digit[456]$/.test(event.code) ? Number(event.code.slice(5)) : 0;
     if (group) { event.preventDefault(); reference.invokeMethodAsync('ControlGroup', group, event.ctrlKey || event.altKey || event.metaKey).catch(() => {}); return; }
+    // F centres the camera on the player's hero; Home returns to the whole map.
+    if (r.state && (event.key === 'f' || event.key === 'F') && !document.querySelector('.modal-backdrop')) { event.preventDefault(); focusHero(r); return; }
+    if (r.state && event.key === 'Home') { event.preventDefault(); resetView(r); return; }
     if (event.key === 'Escape' || ['q', 'w', 'a', 'h', 'b', '1', '2', '3'].includes(event.key.toLowerCase())) { event.preventDefault(); reference.invokeMethodAsync('Key', event.key === 'Escape' ? 'Escape' : event.key.toLowerCase()).catch(() => {}); }
     if (event.key === 'Tab') {
       const dialog = document.querySelector('[role=dialog]');
@@ -280,72 +341,18 @@ export async function mount(element, reference, options) {
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
     }
   };
+  r.keyUp = event => r.view.keys.delete(event.key);
+  r.blur = () => r.view.keys.clear();
   window.addEventListener('keydown', r.key);
-  // Adaptive audio, all synthesized (no audio files): a pad, rain noise that follows the weather, a tense layer
-  // and drum hits that follow the fighting, thunder, and a short phrase when the match ends.
-  r.startAudio = () => {
-    if (r.audio) return;
-    const Audio = window.AudioContext || window.webkitAudioContext; if (!Audio) return;
-    const audio = r.audio = new Audio(); r.gain = audio.createGain(); r.gain.gain.value = r.options.volume / 3500; r.gain.connect(audio.destination);
-    [110, 164.81, 220].forEach(frequency => { const oscillator = audio.createOscillator(); oscillator.type = 'sine'; oscillator.frequency.value = frequency; oscillator.connect(r.gain); oscillator.start(); });
-    r.noise = audio.createBuffer(1, audio.sampleRate * 2, audio.sampleRate);
-    const samples = r.noise.getChannelData(0); for (let i = 0; i < samples.length; i++) samples[i] = Math.random() * 2 - 1;
-    const rainSource = audio.createBufferSource(); rainSource.buffer = r.noise; rainSource.loop = true;
-    const rainFilter = audio.createBiquadFilter(); rainFilter.type = 'bandpass'; rainFilter.frequency.value = 1700; rainFilter.Q.value = .4;
-    r.rainGain = audio.createGain(); r.rainGain.gain.value = 0; rainSource.connect(rainFilter); rainFilter.connect(r.rainGain); r.rainGain.connect(r.gain); rainSource.start();
-    const tension = audio.createBiquadFilter(); tension.type = 'lowpass'; tension.frequency.value = 420;
-    r.combatGain = audio.createGain(); r.combatGain.gain.value = 0; tension.connect(r.combatGain); r.combatGain.connect(r.gain);
-    [73.42, 110.6].forEach(frequency => { const oscillator = audio.createOscillator(); oscillator.type = 'sawtooth'; oscillator.frequency.value = frequency; oscillator.connect(tension); oscillator.start(); });
-    r.musicGain = audio.createGain(); r.musicGain.gain.value = .55; r.musicGain.connect(r.gain);
-  };
-  r.tone = (frequency, endFrequency, start, length, level, type = 'sine') => {
-    const audio = r.audio; if (!audio || audio.state !== 'running') return;
-    const oscillator = audio.createOscillator(), envelope = audio.createGain(), at = audio.currentTime + start;
-    oscillator.type = type; oscillator.frequency.setValueAtTime(frequency, at); oscillator.frequency.exponentialRampToValueAtTime(endFrequency, at + length);
-    envelope.gain.setValueAtTime(level, at); envelope.gain.exponentialRampToValueAtTime(.001, at + length);
-    oscillator.connect(envelope); envelope.connect(r.gain); oscillator.start(at); oscillator.stop(at + length + .02);
-  };
-  r.thunder = () => {
-    const audio = r.audio; if (!audio || audio.state !== 'running') return;
-    const source = audio.createBufferSource(), filter = audio.createBiquadFilter(), envelope = audio.createGain();
-    source.buffer = r.noise; filter.type = 'lowpass'; filter.frequency.value = 170;
-    envelope.gain.setValueAtTime(5, audio.currentTime + .15); envelope.gain.exponentialRampToValueAtTime(.001, audio.currentTime + 1.6);
-    source.connect(filter); filter.connect(envelope); envelope.connect(r.gain); source.start(audio.currentTime + .15); source.stop(audio.currentTime + 1.7);
-  };
-  // Music: a short gamelan-like piece in a pelog-style scale, composed for the game and synthesized here, not recorded.
-  // Calm play keeps the saron melody, kenong and gong; fighting adds the kendang and quickens the pulse.
-  const pelog = [293.66, 311.13, 349.23, 440, 466.16, 587.33];
-  const balungan = [2, 3, 2, 1, 2, 3, 5, 3, 1, 2, 3, 2, 4, 3, 2, 1];
-  const strike = (frequency, at, level, decay, partial = 2.76) => {
-    const audio = r.audio, envelope = audio.createGain();
-    envelope.gain.setValueAtTime(level, at); envelope.gain.exponentialRampToValueAtTime(.0005, at + decay);
-    envelope.connect(r.musicGain);
-    for (const [ratio, weight] of [[1, 1], [partial, .35]]) {
-      const oscillator = audio.createOscillator(), gain = audio.createGain();
-      oscillator.frequency.value = frequency * ratio; gain.gain.value = weight;
-      oscillator.connect(gain); gain.connect(envelope); oscillator.start(at); oscillator.stop(at + decay + .05);
-    }
-  };
-  const drum = (at, level) => {
-    const audio = r.audio, source = audio.createBufferSource(), filter = audio.createBiquadFilter(), envelope = audio.createGain();
-    source.buffer = r.noise; filter.type = 'lowpass'; filter.frequency.value = 420;
-    envelope.gain.setValueAtTime(level, at); envelope.gain.exponentialRampToValueAtTime(.001, at + .18);
-    source.connect(filter); filter.connect(envelope); envelope.connect(r.musicGain); source.start(at); source.stop(at + .2);
-  };
-  r.music = now => {
-    const audio = r.audio; if (!audio || audio.state !== 'running' || !r.musicGain) return;
-    if (!r.musicAt || r.musicAt < audio.currentTime - 1) r.musicAt = audio.currentTime + .1;
-    const fighting = !!r.state && r.combat > .3, beat = (fighting ? .3 : .42) * (r.state ? 1 : 1.25);
-    while (r.musicAt < audio.currentTime + .25) {
-      const step = r.musicStep = ((r.musicStep || 0) + 1) % 64, note = balungan[step % 16], at = r.musicAt;
-      strike(pelog[note], at, .5, 1.1);
-      if (step % 2 === 1) strike(pelog[(note + 2) % pelog.length] * 2, at, .18, .5, 3.1); // bonang answer
-      if (step % 4 === 0) strike(146.83, at, .45, 1.6, 2.1); // kenong
-      if (step % 16 === 15) { strike(65.4, at, 1.1, 5, 1.5); strike(66.1, at, .8, 5, 1.5); } // gong, beating slowly
-      if (fighting) { drum(at, .9 + r.combat); if (step % 2 === 0) drum(at + beat / 2, .5); }
-      r.musicAt += beat;
-    }
-  };
+  window.addEventListener('keyup', r.keyUp);
+  window.addEventListener('blur', r.blur);
+  // Sound starts with the first gesture (browsers refuse it before one); buttons answer with a soft click.
+  // At volume zero no audio graph is made at all; it starts with the first gesture once there is something to hear.
+  r.startAudio = () => { r.gestured = true; if (r.options.volume > 0) r.audio.start(r.options.volume); };
+  window.addEventListener('pointerdown', r.startAudio);
+  window.addEventListener('keydown', r.startAudio);
+  r.uiClick = event => { if (event.target.closest?.('button,summary,select,input[type=checkbox]')) r.audio.play('click', { gain: .5 }); };
+  document.addEventListener('pointerdown', r.uiClick, true);
   // Recorded dialogue (see docs/ASSETS.md). One clip plays at a time; the music dips under it.
   r.voice = new Audio(); r.voice.preload = 'auto';
   r.playVoice = dialogue => {
@@ -357,21 +364,40 @@ export async function mount(element, reference, options) {
     r.voice.volume = Math.min(1, r.options.volume / 50);
     r.voice.play().catch(() => { /* Autoplay can be refused before the first interaction. */ });
   };
-  window.addEventListener('pointerdown', r.startAudio, { once: true });
-  r.resize = new ResizeObserver(() => { const width = element.clientWidth, height = element.clientHeight; renderer.setSize(width, height, false); camera.aspect = width / height; camera.updateProjectionMatrix(); });
+  r.configure = () => {
+    const low = r.options.quality === 'low', height = element.clientHeight || 800;
+    r.fx.configure(r.options.quality, r.options.reducedMotion, height * renderer.getPixelRatio(), camera.fov);
+    // Bloom and grading need a real GPU; software rendering (and power saving) draws the scene directly.
+    if (low) r.postDropped = false;
+    if (!low && !r.software && !r.post && !r.postDropped) { r.post = new PostProcessing(renderer, scene, camera); r.post.setSize(element.clientWidth || 1, element.clientHeight || 1, renderer.getPixelRatio()); }
+    if ((low || r.software) && r.post) { r.post.dispose(); r.post = null; }
+    // Shadows need a GPU: a software rasterizer (no GPU) draws without them, as it does without bloom.
+    sun.castShadow = !low && !r.software;
+    // The swell needs fewer vertices when power matters.
+    const seaSegments = low ? 48 : 100;
+    if (r.water.geometry.parameters.widthSegments !== seaSegments) { r.water.geometry.dispose(); r.water.geometry = new THREE.PlaneGeometry(2000, 2000, seaSegments, seaSegments); }
+  };
+  r.resize = new ResizeObserver(() => {
+    const width = element.clientWidth, height = element.clientHeight;
+    renderer.setSize(width, height, false); camera.aspect = width / height; camera.updateProjectionMatrix();
+    r.post?.setSize(width, height, renderer.getPixelRatio()); r.configure();
+  });
   r.resize.observe(element);
-  let previous = performance.now();
-  const playCamera = new THREE.Vector3(145, 150, 170), menuCamera = new THREE.Vector3(137, 86, 145);
-  const playTarget = new THREE.Vector3(50, 0, 50), menuTarget = new THREE.Vector3(43, 9, 45);
+  r.configure();
+  applyMap(r);
+  let previous = performance.now(), clock = 0;
+  const menuCamera = new THREE.Vector3(137, 86, 145), menuTarget = new THREE.Vector3(43, 9, 45);
   const dayColor = new THREE.Color('#19323e'), nightColor = new THREE.Color('#081119'), greyColor = new THREE.Color('#3b4b52'), duskColor = new THREE.Color('#ff9a5c');
-  const sunDay = new THREE.Color('#ffe4b0'), sunNight = new THREE.Color('#8fa9ff'), skyColor = new THREE.Color(), focus = new THREE.Vector3(), orbit = new THREE.Vector3();
+  const sunDay = new THREE.Color('#ffe4b0'), sunNight = new THREE.Color('#8fa9ff'), skyColor = new THREE.Color(), focus = new THREE.Vector3(), orbit = new THREE.Vector3(), aim = new THREE.Vector3(), place = new THREE.Vector3();
   const levels = { clear: [0, 0, .5], mist: [0, 1, .35], rain: [.6, .35, .9], storm: [1, .45, 1.8] };
-  let nextDrum = 0, orbitAngle = 0, lastFlashTick = -1;
+  let orbitAngle = 0, lastFlashTick = -1, nextCall = 4;
   renderer.setAnimationLoop(now => {
     r.frameMs = r.frameMs ? r.frameMs * .95 + (now - previous) * .05 : now - previous;
     // Cutscenes run on wall-clock time, so a slow frame rate does not stretch them.
     const dt = Math.min((now - previous) / 1000, .1), wall = Math.min((now - previous) / 1000, 1); previous = now;
-    const playing = !!r.state, still = r.options.reducedMotion, low = r.options.quality === 'low';
+    const playing = !!r.state, still = r.options.reducedMotion, low = r.options.quality === 'low', size = r.size;
+    if (!still) clock += dt;
+    renderer.info.reset();
     // Weather and time of day come from the match tick (see Atmosphere.cs); the menu keeps a clear afternoon.
     const [rainTarget, mistTarget, swellTarget] = levels[playing ? r.sky.weather : 'clear'] || levels.clear;
     const ease = Math.min(1, dt * .7);
@@ -381,32 +407,35 @@ export async function mount(element, reference, options) {
     r.flash = Math.max(0, r.flash - dt * 5);
     skyColor.copy(nightColor).lerp(dayColor, day).lerp(greyColor, Math.min(.75, r.mist * .55 + r.rain * .3)).lerp(duskColor, dusk * .12);
     scene.background.copy(skyColor); scene.fog.color.copy(skyColor);
-    scene.fog.density = (playing ? .0025 : .0035) + r.mist * .0011 + r.rain * .0003;
+    scene.fog.density = ((playing ? .0024 : .0032) + r.mist * .0011 + r.rain * .0003) * 100 / Math.max(100, size);
     sun.color.copy(sunNight).lerp(sunDay, day).lerp(duskColor, dusk * .45);
     sun.intensity = 4.3 * (.3 + .7 * day) * (1 - r.rain * .35);
     hemisphere.intensity = 2.6 * (.5 + .5 * day) * (1 - r.rain * .2) + r.flash * 3;
     rim.intensity = 3 * (.45 + .55 * day);
     renderer.toneMappingExposure = 1.3 * (.78 + .22 * day);
-    waterUniforms.uSwell.value = still ? 0 : r.swell;
-    foam.material.opacity = .22 + (still ? 0 : .12 * Math.sin(now * .0011)) + r.swell * .1;
+    r.ocean.uSwell.value = still ? 0 : r.swell;
+    if (!still) r.ocean.uTime.value += dt;
+    // Wind follows the weather: foliage leans harder in a storm.
+    r.landscape?.update(clock, still ? 0 : .45 + r.rain * .5 + (r.sky.weather === 'storm' ? .5 : 0));
+    r.dressing?.update(clock, still ? 0 : .45 + r.rain * .5);
     ripples.visible = r.rain > .1 && !still;
     if (ripples.visible) {
       for (let i = 0; i < 48; i++) {
         rippleAge[i] += dt * (.8 + r.rain);
-        if (rippleAge[i] > 1) { rippleAge[i] -= 1; const angle = Math.random() * Math.PI * 2, radius = 60 + Math.random() * 40; rippleSpot[i * 2] = 50 + Math.cos(angle) * radius; rippleSpot[i * 2 + 1] = 50 + Math.sin(angle) * radius; }
-        rippleMatrix.position.set(rippleSpot[i * 2], -3.7, rippleSpot[i * 2 + 1]); rippleMatrix.rotation.set(-Math.PI / 2, 0, 0); rippleMatrix.scale.setScalar(.3 + rippleAge[i] * 2.4);
+        if (rippleAge[i] > 1 || rippleSpot[i * 2] === 0) { rippleAge[i] %= 1; const angle = Math.random() * Math.PI * 2, radius = size * (.62 + Math.random() * .45); rippleSpot[i * 2] = size / 2 + Math.cos(angle) * radius; rippleSpot[i * 2 + 1] = size / 2 + Math.sin(angle) * radius; }
+        rippleMatrix.position.set(rippleSpot[i * 2], SEA_LEVEL + .3, rippleSpot[i * 2 + 1]); rippleMatrix.rotation.set(-Math.PI / 2, 0, 0); rippleMatrix.scale.setScalar(.3 + rippleAge[i] * 2.4);
         rippleMatrix.updateMatrix(); ripples.setMatrixAt(i, rippleMatrix.matrix);
       }
       ripples.instanceMatrix.needsUpdate = true; ripples.material.opacity = .45 * Math.min(1, r.rain);
     }
-    if (!still) waterUniforms.uTime.value += dt;
     // Rain is hidden under reduced motion; the darker sky, the mist and the HUD label still tell the weather.
     rain.visible = r.rain > .03 && !still;
     if (rain.visible) {
+      rain.position.set(r.look.x, 0, r.look.z);
       const active = Math.floor(drops * Math.min(1, r.rain) * (low ? .4 : 1)), fall = dt * (46 + r.rain * 26), drift = dt * 9 * r.rain;
       for (let i = 0; i < active; i++) {
         const base = i * 6; let x = rainPositions[base] + drift, y = rainPositions[base + 1] - fall;
-        if (y < 0) { y += 120; x -= 40 * r.rain; } if (x > 150) x -= 160;
+        if (y < 0) { y += 120; x -= 40 * r.rain; } if (x > 80) x -= 160;
         rainPositions[base] = x; rainPositions[base + 1] = y;
         rainPositions[base + 3] = x - .9 * r.rain; rainPositions[base + 4] = y + 5; rainPositions[base + 5] = rainPositions[base + 2];
       }
@@ -414,16 +443,11 @@ export async function mount(element, reference, options) {
       rain.material.opacity = .6 * Math.min(1, r.rain * 1.4);
     }
     // One soft flash now and then during a storm, never under reduced motion (no strobing).
-    if (playing && r.sky.weather === 'storm' && !still && r.state.tick !== lastFlashTick && (Math.imul(r.state.tick, 2654435761) >>> 0) % 83 === 0) { lastFlashTick = r.state.tick; r.flash = 1; r.thunder(); }
+    if (playing && r.sky.weather === 'storm' && !still && r.state.tick !== lastFlashTick && (Math.imul(r.state.tick, 2654435761) >>> 0) % 83 === 0) { lastFlashTick = r.state.tick; r.flash = 1; r.audio.play('thunder', { gain: .9, pan: Math.random() - .5 }); }
     r.combat += (r.combatTarget - r.combat) * Math.min(1, dt * 2.5);
-    if (r.audio) {
-      const time = r.audio.currentTime;
-      r.rainGain.gain.setTargetAtTime(playing ? r.rain * 1.6 : 0, time, .4);
-      r.combatGain.gain.setTargetAtTime(playing ? r.combat * .8 : 0, time, .3);
-      if (playing && r.combat > .18 && now >= nextDrum) { r.tone(130, 46, 0, .2, 1.2 + r.combat * 2.2); nextDrum = now + (r.combat > .6 ? 300 : 520); }
-      if (r.musicGain) r.musicGain.gain.setTargetAtTime(r.voice && !r.voice.paused ? .25 : .55, time, .3);
-      r.music(now);
-    }
+    // Sound must never stop the picture: a failing audio graph is logged once and left alone.
+    try { r.audio.update({ playing, combat: r.combat, rain: playing ? r.rain : 0, daylight: r.daylight, voice: !!r.voice && !r.voice.paused, ended: playing && r.state.status !== 0 }); }
+    catch (error) { if (!r.audioFailed) console.warn('Battle of Nusantara: audio update failed', error); r.audioFailed = true; }
     if (r.fire) { r.fire.intensity = still ? 60 : 60 + Math.sin(now * .013) * 14 + Math.sin(now * .031) * 9; r.flame.scale.y = still ? 1 : 1 + Math.sin(now * .017) * .18; }
     if (r.intro) {
       // A cutscene: a list of shots, each a camera path and a look path over its own duration.
@@ -434,30 +458,54 @@ export async function mount(element, reference, options) {
       else {
         const t = Math.min(1, r.intro.time / shot.duration), e = t * t * (3 - 2 * t);
         shot.camera(e, orbit); shot.look(e, focus);
-        camera.position.copy(orbit); camera.lookAt(focus);
+        camera.position.copy(orbit); camera.lookAt(focus); r.look.copy(focus);
         if (r.intro.index === r.intro.shots.length - 1 && t > .72 && r.intro.kind === 'intro') r.cine.classList.remove('on');
       }
-    } else {
-      let cameraPosition = playing ? playCamera : menuCamera;
-      if (playing && r.state.status !== 0 && !still && r.options.cinematics) {
+    } else if (playing) {
+      // Arrow keys pan along the ground as seen on screen; the pan stays over the arena.
+      if (r.view.keys.size) {
+        aim.subVectors(r.look, camera.position).setY(0).normalize();
+        const speed = size * .55 * r.view.zoom * dt, up = (r.view.keys.has('ArrowUp') ? 1 : 0) - (r.view.keys.has('ArrowDown') ? 1 : 0), right = (r.view.keys.has('ArrowRight') ? 1 : 0) - (r.view.keys.has('ArrowLeft') ? 1 : 0);
+        r.view.pan.x += (aim.x * up - aim.z * right) * speed; r.view.pan.z += (aim.z * up + aim.x * right) * speed;
+        clampView(r);
+      }
+      if (r.state.status !== 0 && !still && r.options.cinematics) {
         // The match is over: drift slowly around the arena behind the result panel.
         orbitAngle += dt * .1;
-        cameraPosition = orbit.set(50 + Math.cos(.86 + orbitAngle) * 150, 130, 50 + Math.sin(.86 + orbitAngle) * 150);
-      } else orbitAngle = 0;
-      camera.position.lerp(cameraPosition, Math.min(1, dt * 3));
-      camera.lookAt(playing ? playTarget : menuTarget);
+        place.set(size / 2 + Math.cos(.86 + orbitAngle) * size * 1.5, size * 1.3, size / 2 + Math.sin(.86 + orbitAngle) * size * 1.5);
+        aim.set(size / 2, 0, size / 2);
+      } else {
+        orbitAngle = 0;
+        aim.set(size / 2, 0, size / 2).add(r.view.pan);
+        playOffset(size, r.view.zoom, place).add(aim);
+      }
+      camera.position.lerp(place, Math.min(1, dt * 4));
+      r.look.lerp(aim, Math.min(1, dt * 4));
+      camera.lookAt(r.look);
+    } else {
+      // The title screen sways gently around the shrine.
+      place.copy(menuCamera); if (!still) place.x += Math.sin(clock * .06) * 7, place.y += Math.sin(clock * .045) * 2;
+      camera.position.lerp(place, Math.min(1, dt * 3));
+      r.look.lerp(menuTarget, Math.min(1, dt * 3));
+      camera.lookAt(r.look);
     }
     if (!still) { particles.rotation.y += dt * .012; r.mixers.forEach(m => m.update(dt)); }
+    particles.position.set(r.look.x, 0, r.look.z);
     let animated = 0;
     for (const object of r.units.values()) {
       object.position.lerp(object.userData.target, Math.min(1, dt * 14));
-      if ((object.userData.kind === 'relic' || object.userData.kind === 'artifact') && !still) object.rotation.y += dt;
-      const figure = object.userData.figure;
+      const data = object.userData;
+      if ((data.kind === 'relic' || data.kind === 'artifact') && !still) object.rotation.y += dt;
+      if (data.loot) {
+        if (!still) { data.body.rotation.y += dt * 1.4; data.body.position.y = .35 + Math.sin(clock * 2.2 + data.unitId) * .18; r.fx.wisp(object.position.x, object.position.z, data.lootColor, dt); }
+        continue;
+      }
+      const figure = data.figure;
       if (figure) {
         // Turn the short way towards the heading, then advance the clip.
-        let turn = object.userData.heading - figure.rotation.y; turn = Math.atan2(Math.sin(turn), Math.cos(turn));
+        let turn = data.heading - figure.rotation.y; turn = Math.atan2(Math.sin(turn), Math.cos(turn));
         figure.rotation.y += turn * Math.min(1, dt * 10);
-        if (!still) { object.userData.mixer.update(dt); animated++; }
+        if (!still) { data.mixer.update(dt); animated++; }
       }
     }
     r.animated = animated;
@@ -474,53 +522,104 @@ export async function mount(element, reference, options) {
       const t = Math.min(1, effect.age / effect.duration); effect.step(t);
       if (t >= 1) { r.scene.remove(effect.object); release(effect.object); r.effects.splice(i, 1); }
     }
-    sun.castShadow = !low; particles.visible = !low;
-    renderer.render(scene, camera);
+    // Steady sources of light and smoke: torches, the volcano, and the Keeper's fire.
+    const features = r.landscape?.features;
+    if (features && !still) {
+      for (const flame of features.flames) r.fx.flame(flame.x, flame.y, flame.z, dt);
+      for (const smoke of features.smoke) r.fx.smoke(smoke.x, smoke.y, smoke.z, dt);
+      if (r.fire && r.story.visible) r.fx.flame(33, 1.6, 23, dt * 2);
+    }
+    r.life?.update(dt, r.fx, { danger: r.danger || [], daylight: r.daylight, still, zoom: playing ? r.view.zoom : 1 });
+    // Now and then an animal on screen calls out: a buffalo lows, a macaque chatters, a hen clucks in the village.
+    if (playing && (nextCall -= dt) < 0) {
+      nextCall = 5 + Math.random() * 8;
+      const callers = r.state.units.filter(u => u.kind === 'wild' && animalVoices[u.model]);
+      const caller = callers[Math.floor(Math.random() * callers.length)];
+      if (caller) r.sound(animalVoices[caller.model], caller.x, caller.z, .55);
+      else if (features?.village && Math.random() < .5) r.sound('chicken', features.village.x, features.village.z, .4);
+    }
+    r.fx.update(still ? dt * .5 : dt);
+    // A GPU that cannot keep bloom above about 38 frames a second for four seconds draws without it for this session.
+    if (r.post && !r.intro && playing) {
+      r.slow = r.frameMs > 26 ? (r.slow || 0) + wall : 0;
+      if (r.slow > 4) { r.post.dispose(); r.post = null; r.postDropped = true; r.slow = 0; console.info('Battle of Nusantara: bloom turned off, frames took over 26 ms.'); }
+    }
+    particles.visible = !low;
+    if (r.post) r.post.render(dt); else renderer.render(scene, camera);
+    r.frameCalls = renderer.info.render.calls; r.frameTriangles = renderer.info.render.triangles;
   });
-  camera.position.set(137, 86, 145);
+  camera.position.copy(menuCamera); camera.lookAt(menuTarget);
   r.ready = true;
   element.dataset.ready = 'true';
 }
 
+// High quality on a software rasterizer becomes 'medium': half the scattered nature and no shadows.
+const landscapeQuality = r => r.options.quality === 'low' ? 'low' : r.software ? 'medium' : 'high';
+// The battle camera: above and behind the south-east corner, scaled to the map, and nearer when zoomed in.
+const playOffset = (size, zoom, out) => out.set(95, 150, 120).multiplyScalar(size / 100 * zoom);
+function clampView(r) { const half = r.size / 2; r.view.pan.x = THREE.MathUtils.clamp(r.view.pan.x, -half, half); r.view.pan.z = THREE.MathUtils.clamp(r.view.pan.z, -half, half); r.view.pan.y = 0; }
+function resetView(r) { r.view.zoom = 1; r.view.pan.set(0, 0, 0); r.view.keys.clear(); }
+function focusHero(r) {
+  const hero = r.state?.units.find(u => u.kind === 'hero' && u.owner === r.owner);
+  if (!hero) return;
+  r.view.zoom = Math.min(r.view.zoom, .5);
+  r.view.pan.set(hero.x - r.size / 2, 0, hero.z - r.size / 2); clampView(r);
+}
+
+// Builds (or rebuilds) everything that depends on the map: the landscape, the shrines, the fog overlay, the sun's shadow
+// box and the ambient life. The title screen uses its own vista.
+function applyMap(r, force = false) {
+  const map = r.mapDef || MENU_MAP, quality = landscapeQuality(r);
+  if (!force && r.landscape?.id === map.id) return;
+  r.life?.dispose(release); r.life = null;
+  if (r.landscape) { r.scene.remove(r.landscape.group); r.landscape.dispose(); }
+  if (r.dressing) { r.scene.remove(r.dressing.group); r.dressing.dispose(); r.dressing = null; r.obstacleKey = null; }
+  r.size = map.size;
+  r.landscape = buildLandscape(map, r.kit, quality); r.landscape.id = map.id;
+  r.scene.add(r.landscape.group);
+  r.ocean.uShore.value = r.landscape.shore; r.ocean.uShoreSize.value = r.landscape.extent;
+  r.water.position.set(map.size / 2, SEA_LEVEL, map.size / 2);
+  const L = layout(map.size);
+  r.bases.forEach(({ copy, beacon }, i) => { const at = i === 0 ? L.ally : L.enemy; copy.position.set(at, 0, at); beacon.position.set(at, 10, at); });
+  r.fog.scale.set(map.size, map.size, 1); r.fog.position.set(map.size / 2, .15, map.size / 2);
+  const center = map.size / 2, reach = Math.max(90, map.size * .8);
+  r.sun.position.set(center + 30, 100, center + 50); r.sun.target.position.set(center, 0, center); r.sun.target.updateMatrixWorld();
+  Object.assign(r.sun.shadow.camera, { left: -reach, right: reach, top: reach, bottom: -reach, near: 1, far: 260 }); r.sun.shadow.camera.updateProjectionMatrix();
+  r.life = new Life(r.scene, model => makeFigure(r, model, r.templates.get(model)?.animal ? animalScales[model] || 2 : 1.9 * 1.05, '#c8a070'), r.landscape, r.options);
+  // Adventure keeps its authored props; they are rebuilt with the map.
+  for (const child of [...r.story.children]) { r.story.remove(child); release(child); }
+  r.fire = r.flame = r.seal = null; r.obstacleKey = null;
+  if (map.mode === 2) buildStory(r);
+}
+
 export function update(state, owner, selection = [], attackMove = false, buildMode = false, sky = null) {
   const r = runtime; if (!r || r.disposed || !r.ready) return;
-  const started = state && !r.state, ended = state && r.state && state.status !== 0 && r.state.status === 0;
+  const before = r.state;
+  const started = state && !before, ended = state && before && state.status !== 0 && before.status === 0;
   if (sky) r.sky = sky;
   r.element.dataset.weather = state ? r.sky.weather : 'clear';
-  if (!state) { r.endIntro(); r.combatTarget = 0; }
+  r.element.dataset.map = r.landscape?.id || '';
+  if (!state) { r.endIntro(); r.combatTarget = 0; r.danger = []; }
+  if (started) { resetView(r); r.sound('horn', undefined, undefined, .8); }
   const cinematic = r.options.cinematics && !r.options.reducedMotion;
   if (started && state.tick < 30 && cinematic) startCutscene(r, 'intro', introShots(r, state, owner));
   if (ended && state.mode === 2 && state.status === 1 && cinematic) startCutscene(r, 'ending', endingShots(r, state));
   r.playVoice(state?.mode === 2 ? state.dialogue : '');
-  // A short phrase when the match is decided: rising for a victory, falling for a defeat.
-  if (ended) (state.status === 1 ? [220, 277.18, 329.63, 440] : [220, 207.65, 174.61, 146.83]).forEach((note, i) => r.tone(note, note, i * .17, .5, 2.4, 'triangle'));
+  // A stinger when the match is decided: brass and gong for a victory, falling strings for a defeat.
+  if (ended) r.audio.play(state.status === 1 ? 'victory' : 'defeat', { gain: 1 });
   r.story.visible = state?.mode === 2;
-  if (state?.mode === 2 && !r.story.children.length) buildStory(r);
   r.state = state; r.owner = owner; r.scenery.visible = !state; r.battle.visible = !!state;
   r.attackMove = attackMove;
   r.buildMode = buildMode;
   if (!buildMode) r.placement.visible = false;
   r.renderer.domElement.style.cursor = attackMove || buildMode ? 'crosshair' : 'default';
   const selected = new Set(selection);
-  const obstacleKey = JSON.stringify(state?.obstacles || []);
-  if (obstacleKey !== r.obstacleKey) {
-    for (const wall of r.ruins.children) if (wall.userData.wall) wall.geometry.dispose();
-    r.ruins.clear();
-    for (const obstacle of state?.obstacles || []) {
-      if (state.mode === 2) {
-        // Adventure obstacles are the Mystic Cave walls and its sealed door, not shrine ruins.
-        r.wallMaterial ||= new THREE.MeshStandardMaterial({ color: '#56686a', roughness: .95 });
-        const wall = new THREE.Mesh(new THREE.BoxGeometry(obstacle.width, 6, obstacle.depth), r.wallMaterial);
-        wall.position.set(obstacle.x, 3, obstacle.z); wall.castShadow = true; wall.receiveShadow = true; wall.userData.wall = true;
-        r.ruins.add(wall);
-        continue;
-      }
-      const ruin = r.ruinTemplate.clone();
-      ruin.position.set(obstacle.x, 0, obstacle.z);
-      ruin.rotation.set(0, 0, 0);
-      ruin.scale.set(obstacle.width / 10, .55, obstacle.depth / 13);
-      r.ruins.add(ruin);
-    }
+  const obstacleKey = state ? JSON.stringify(state.obstacles) : '';
+  if (obstacleKey !== r.obstacleKey && r.landscape) {
+    if (r.dressing) { r.scene.remove(r.dressing.group); r.dressing.dispose(); r.dressing = null; }
+    if (state?.obstacles?.length) { r.dressing = dressObstacles(state.obstacles, r.kit, r.landscape.heightAt, r.landscape.id, landscapeQuality(r)); r.scene.add(r.dressing.group); }
+    // The sealed door of the Mystic Cave glows until the road guardians fall.
+    if (r.seal) r.seal.visible = !!state?.obstacles?.some(o => o.kind === 'door');
     r.obstacleKey = obstacleKey;
   }
   if (!state) r.cursor.visible = false;
@@ -528,7 +627,7 @@ export function update(state, owner, selection = [], attackMove = false, buildMo
   r.fog.visible = vision.length > 0;
   r.element.dataset.fog = vision.length ? 'on' : 'off';
   if (vision.length) {
-    const size = r.fogCanvas.width, scale = size / 100, seen = r.seenCanvas.getContext('2d'), fog = r.fogCanvas.getContext('2d');
+    const size = r.fogCanvas.width, scale = size / r.size, seen = r.seenCanvas.getContext('2d'), fog = r.fogCanvas.getContext('2d');
     if (r.fogTick === undefined || state.tick < r.fogTick) seen.clearRect(0, 0, size, size);
     r.fogTick = state.tick;
     seen.fillStyle = '#fff';
@@ -558,134 +657,268 @@ export function update(state, owner, selection = [], attackMove = false, buildMo
     marker.position.y = resource.remaining > 0 ? 0 : -1.4;
   }
   for (const [id, marker] of r.resourceMarkers) if (!resourceIds.has(id)) { r.scene.remove(marker); release(marker); r.resourceMarkers.delete(id); }
-  const live = new Set(); let damage = 0; const hurt = [];
+  const live = new Set(); let damage = 0, sparks = 0, neutrals = 0; const danger = [];
+  const now = performance.now();
   // The player's ultimate: the cooldown jumped up since the last snapshot.
   const cast = state && state.ultimateCooldown > r.lastCooldown + 5; r.lastCooldown = state?.ultimateCooldown || 0;
-  const castFrom = cast ? r.units.get(state.units.find(u => u.kind === 'hero' && u.owner === owner)?.id)?.position.clone() : null;
+  const ownHero = state?.units.find(u => u.kind === 'hero' && u.owner === owner);
+  const castFrom = cast ? r.units.get(ownHero?.id)?.position.clone() : null;
   for (const unit of state?.units || []) {
     live.add(unit.id);
+    if (unit.kind === 'creep' || unit.kind === 'wild') neutrals++;
     let object = r.units.get(unit.id);
-    if (!object) {
-      object = new THREE.Group(); object.userData.kind = unit.kind; object.userData.unitId = unit.id;
-      const size = unit.kind === 'boss' ? 3.2 : unit.kind === 'tower' ? 2.2 : unit.kind === 'hero' || unit.kind === 'champion' ? 1.8 : unit.kind === 'warden' || unit.kind === 'npc' ? 1.4 : 1.1;
-      const model = unit.kind === 'boss' && unit.model === 'naga' ? 'naga' : modelFor(unit), template = model && r.templates.get(model);
-      if (template) {
-        const figure = cloneSkinned(template.scene); figure.scale.setScalar((model === 'naga' ? 1.2 : 1.9) * size);
-        figure.traverse(o => { if (o.isSkinnedMesh) { o.castShadow = true; o.frustumCulled = false; if (o.material.name === 'Tint') o.material = tintMaterial(r, unit.color); } });
-        const mixer = new THREE.AnimationMixer(figure), actions = {};
-        for (const clip of template.clips) actions[clip.name] = mixer.clipAction(clip);
-        actions.Walk.timeScale = 1.5; actions.Attack.timeScale = 1.25;
-        for (const name of ['Cast', 'Hit', 'Death']) { actions[name].setLoop(THREE.LoopOnce); actions[name].clampWhenFinished = true; }
-        actions.Idle.play(); actions.Idle.time = (unit.id * .37) % actions.Idle.getClip().duration;
-        mixer.update(0);
-        Object.assign(object.userData, { figure, mixer, actions, clip: 'Idle', model, oneShot: 0, heading: unit.team === 0 || unit.team === 2 ? .8 : -2.3 });
-        figure.rotation.y = object.userData.heading;
-        object.add(figure); r.modelled = (r.modelled || 0) + 1;
-      } else if (propKinds[unit.kind] && r.props.has(propKinds[unit.kind])) {
-        const body = r.props.get(propKinds[unit.kind]).clone();
-        body.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; if (o.material.name === 'Tint') o.material = tintMaterial(r, unit.color); } });
-        if (unit.kind === 'outpost') body.traverse(o => { if (o.isMesh) { o.material = o.material.clone(); o.material.transparent = true; } });
-        body.scale.setScalar({ tower: 1.1, outpost: 1.15, relic: 1.3, artifact: 1.3, flotsam: 1.4 }[unit.kind]);
-        object.add(body); object.userData.body = body; r.modelled = (r.modelled || 0) + 1;
-      } else {
-        const material = new THREE.MeshStandardMaterial({ color: unit.color, roughness: .45, metalness: .35, emissive: unit.color, emissiveIntensity: .4 });
-        const geometry = unit.kind === 'worker' ? new THREE.IcosahedronGeometry(1.3) : new THREE.ConeGeometry(size, size * 3, 6);
-        const body = new THREE.Mesh(geometry, material); body.position.y = size * 1.6; body.castShadow = true; object.add(body);
-        object.userData.body = body;
-      }
-      const ring = new THREE.Mesh(new THREE.RingGeometry(size + .4, size + .65, 24), new THREE.MeshBasicMaterial({ color: unit.owner === owner ? '#fff0b8' : unit.color, side: THREE.DoubleSide })); ring.rotation.x = -Math.PI / 2; ring.position.y = .08; object.add(ring);
-      object.userData.ring = ring;
-      if (unit.kind === 'worker') {
-        const cargo = new THREE.Mesh(new THREE.BoxGeometry(.8, .8, .8), new THREE.MeshStandardMaterial({ color: '#e9c368', emissive: '#e9c368', emissiveIntensity: .3 })); cargo.position.set(0, 5.2, 0); object.add(cargo); object.userData.cargo = cargo;
-      }
-      if (!['relic', 'npc', 'artifact', 'flotsam'].includes(unit.kind)) {
-        const bar = new THREE.Mesh(new THREE.BoxGeometry(3, .25, .35), new THREE.MeshBasicMaterial({ color: unit.team === 0 ? '#83c9ba' : unit.team === 3 ? '#e9c368' : '#dc8ba8' })); bar.position.y = size * 4.5; object.add(bar); object.userData.bar = bar;
-      }
-      object.position.set(unit.x, 0, unit.z); object.userData.target = new THREE.Vector3(unit.x, 0, unit.z); object.userData.health = unit.health;
-      r.units.set(unit.id, object); r.scene.add(object);
-    }
-    const target = object.userData.target, dx = unit.x - target.x, dz = unit.z - target.z;
+    if (!object) object = createUnit(r, unit, owner, !started && !!before);
+    const data = object.userData, target = data.target, dx = unit.x - target.x, dz = unit.z - target.z;
     target.set(unit.x, 0, unit.z);
-    if (unit.health < object.userData.health) { damage += object.userData.health - unit.health; hurt.push(object); object.userData.hurtAt = performance.now(); }
-    object.userData.health = unit.health; object.userData.maxHealth = unit.maxHealth; object.userData.team = unit.team;
-    object.userData.ownHero = unit.kind === 'hero' && unit.owner === owner;
-    if (object.userData.figure && cast && object.userData.ownHero) {
-      playOnce(object, 'Cast');
-      ultimateEffect(r, ultimateEffects[object.userData.model] || 'burst', castFrom || object.position, unit, state);
+    if (unit.health < data.health) {
+      const lost = data.health - unit.health;
+      damage += lost; data.hurtAt = now;
+      danger.push([unit.x, unit.z]);
+      // Sparks and a hit sound where blows land, a few per snapshot.
+      if (sparks++ < 5 && !data.loot) { r.fx.hit(unit.x, unit.z, lost > 30); r.sound('hit', unit.x, unit.z, .7, unit.kind === 'tower' || unit.kind === 'outpost' ? .7 : .9 + Math.random() * .25); }
     }
-    if (object.userData.figure && object.userData.oneShot > performance.now()) { /* A cast or hit reaction is still playing. */ }
-    else if (object.userData.figure) {
+    data.health = unit.health; data.maxHealth = unit.maxHealth; data.team = unit.team; data.model = data.model || unit.model;
+    data.ownHero = unit.kind === 'hero' && unit.owner === owner;
+    if (data.figure && cast && data.ownHero) {
+      playOnce(object, 'Cast');
+      ultimateEffect(r, ultimateEffects[data.model] || 'burst', castFrom || object.position, unit, state);
+    }
+    if (data.figure && data.oneShot > now) { /* A cast or hit reaction is still playing. */ }
+    else if (data.figure) {
       // The snapshot has no animation state: a unit that moved walks, one standing next to an enemy attacks.
       let clip = 'Idle';
-      if (dx * dx + dz * dz > .0009) { clip = 'Walk'; object.userData.heading = Math.atan2(dx, dz); }
-      else if (unit.kind !== 'npc') {
-        let nearest = 81, foe = null;
+      if (dx * dx + dz * dz > .0009) { clip = 'Walk'; data.heading = Math.atan2(dx, dz); }
+      else if (unit.kind !== 'npc' && (unit.kind !== 'wild' || data.hurtAt > now - 8000 || unit.model === 'babi-hutan')) {
+        let nearest = unit.kind === 'wild' ? 16 : 81, foe = null;
         for (const other of state.units) {
-          if (other.team === unit.team || other.kind === 'relic' || other.kind === 'artifact' || other.kind === 'npc') continue;
+          if (other.team === unit.team || other.kind === 'relic' || other.kind === 'artifact' || other.kind === 'npc' || other.kind === 'loot') continue;
+          // Wildlife is only an enemy once it has been hurt; nobody shapes up to a grazing buffalo.
+          if (other.kind === 'wild' && !(r.units.get(other.id)?.userData.hurtAt > now - 8000)) continue;
           const distance = (other.x - unit.x) ** 2 + (other.z - unit.z) ** 2;
           if (distance < nearest) { nearest = distance; foe = other; }
         }
-        if (foe) { clip = 'Attack'; object.userData.heading = Math.atan2(foe.x - unit.x, foe.z - unit.z); }
+        if (foe) { clip = 'Attack'; data.heading = Math.atan2(foe.x - unit.x, foe.z - unit.z); }
       }
       // A unit that was hurt while standing flinches.
-      if (clip === 'Idle' && object.userData.hurtAt > performance.now() - 120 && unit.kind !== 'boss') playOnce(object, 'Hit');
-      else if (clip !== object.userData.clip) {
-        const actions = object.userData.actions;
-        actions[clip].reset().fadeIn(.18).play(); actions[object.userData.clip].fadeOut(.18);
-        object.userData.clip = clip;
+      if (clip === 'Idle' && data.hurtAt > now - 120 && unit.kind !== 'boss') playOnce(object, 'Hit');
+      else if (clip !== data.clip) {
+        const actions = data.actions;
+        actions[clip].reset().fadeIn(.18).play(); actions[data.clip].fadeOut(.18);
+        // A creep that turns to fight growls; the player's hero swings.
+        if (clip === 'Attack' && unit.kind === 'creep') r.sound('growl', unit.x, unit.z, .7, 1.25 / (creepSizes[unit.model] || 1));
+        if (clip === 'Attack' && unit.kind === 'wild' && animalVoices[unit.model]) r.sound(animalVoices[unit.model], unit.x, unit.z, .8);
+        if (clip === 'Attack' && data.ownHero) r.sound('swing', unit.x, unit.z, .6);
+        data.clip = clip;
       }
     }
-    object.userData.ring.material.color.set(selected.has(unit.id) ? '#fff0b8' : unit.color);
-    object.userData.ring.scale.setScalar(selected.has(unit.id) ? 1.25 : 1);
-    if (object.userData.bar) object.userData.bar.scale.x = Math.max(.01, unit.health / unit.maxHealth);
-    if (object.userData.cargo) object.userData.cargo.visible = unit.cargo > 0;
+    if (data.ring) {
+      data.ring.material.color.set(selected.has(unit.id) ? '#fff0b8' : unit.color);
+      data.ring.scale.setScalar(selected.has(unit.id) ? 1.25 : 1);
+    }
+    if (data.bar) {
+      data.bar.scale.x = Math.max(.01, unit.health / unit.maxHealth);
+      // Neutrals show their health only once they have been hurt.
+      if (unit.kind === 'creep' || unit.kind === 'wild') data.bar.visible = unit.health < unit.maxHealth;
+    }
+    if (data.cargo) {
+      if (unit.cargo > (data.cargoAmount || 0)) r.sound('mine', unit.x, unit.z, .55);
+      data.cargoAmount = unit.cargo; data.cargo.visible = unit.cargo > 0;
+    }
     if (unit.kind === 'outpost') {
       // A foundation rises with the work and stays translucent until it is finished.
-      const body = object.userData.body, done = unit.construction >= 100;
+      const body = data.body, done = unit.construction >= 100;
+      if (unit.construction > (data.construction ?? unit.construction)) r.sound('build', unit.x, unit.z, .6);
+      data.construction = unit.construction;
       body.scale.y = 1.15 * (.15 + .85 * unit.construction / 100);
       body.traverse(o => { if (o.isMesh) { o.material.opacity = done ? 1 : .55; o.material.depthWrite = done; } });
     }
-    if (unit.kind === 'artifact' || unit.kind === 'relic') object.userData.body.position.y = unit.kind === 'artifact' ? 1 + Math.sin(state.tick * .2) * .3 : 0;
+    if (unit.kind === 'artifact' || unit.kind === 'relic') data.body.position.y = unit.kind === 'artifact' ? 1 + Math.sin(state.tick * .2) * .3 : 0;
   }
+  r.neutrals = neutrals;
   for (const [id, object] of r.units) {
     if (live.has(id)) continue;
     r.units.delete(id);
-    // A character that vanished while low on health, where the team can still see it, fell: let it play its death.
-    const seen = !vision.length || object.userData.team === 0 || vision.some(v => (v.x - object.position.x) ** 2 + (v.z - object.position.z) ** 2 <= v.radius * v.radius);
-    if (state && object.userData.figure && seen && object.userData.health <= object.userData.maxHealth * .5 && !r.options.reducedMotion) {
-      const actions = object.userData.actions;
-      Object.values(actions).forEach(a => a.stop()); actions.Death.reset().play();
-      if (object.userData.bar) object.userData.bar.visible = false;
-      object.userData.ring.visible = false;
-      r.corpses.push({ object, age: 0 });
+    const data = object.userData, at = object.position;
+    if (data.loot) {
+      // Taken by the player's hero: a rising sparkle and a chime.
+      const hero = ownHero && (ownHero.x - at.x) ** 2 + (ownHero.z - at.z) ** 2 < 25;
+      if (hero && state) { r.fx.pickup(at.x, at.z, data.lootColor); r.sound('loot', at.x, at.z, 1); }
+      r.scene.remove(object); release(object);
       continue;
     }
-    object.userData.mixer?.stopAllAction(); r.scene.remove(object); release(object);
+    // A character that vanished while low on health, where the team can still see it, fell: let it play its death.
+    const seen = !vision.length || data.team === 0 || vision.some(v => (v.x - at.x) ** 2 + (v.z - at.z) ** 2 <= v.radius * v.radius);
+    if (state && data.figure && seen && data.health <= data.maxHealth * .5) {
+      r.fx.death(at.x, at.z, data.kind === 'creep' || data.kind === 'boss');
+      const voice = data.kind === 'creep' ? 'growl' : data.kind === 'wild' ? animalVoices[data.model] || 'death' : 'death';
+      r.sound(voice, at.x, at.z, .8, data.kind === 'creep' ? .8 / (creepSizes[data.model] || 1) : 1);
+      if (!r.options.reducedMotion) {
+        const actions = data.actions;
+        Object.values(actions).forEach(a => a.stop()); actions.Death.reset().play();
+        if (data.bar) data.bar.visible = false;
+        if (data.ring) data.ring.visible = false;
+        r.corpses.push({ object, age: 0 });
+        continue;
+      }
+    }
+    data.mixer?.stopAllAction(); r.scene.remove(object); release(object);
   }
-  // Fighting intensity for the adaptive audio: recent damage, decaying each snapshot.
+  // Moments the simulation reports in its message line, and level and quest changes.
+  if (state && before) {
+    if (state.message && state.message !== before.message) { const cue = cues.find(([pattern]) => pattern.test(state.message)); if (cue) r.sound(cue[1], undefined, undefined, .9); }
+    if (state.level > before.level && ownHero) { r.fx.levelUp(ownHero.x, ownHero.z); r.sound('levelup', ownHero.x, ownHero.z, 1); }
+    if (state.gold >= before.gold + 10 && !cues.some(([pattern]) => pattern.test(state.message || ''))) r.sound('coin', ownHero?.x, ownHero?.z, .6);
+  }
+  r.danger = danger;
+  // Fighting intensity for the adaptive music: recent damage, decaying each snapshot.
   r.combatTarget = state && state.status === 0 ? Math.min(1, r.combatTarget * .9 + damage / 160) : 0;
   r.element.dataset.combat = r.combatTarget > .18 ? 'battle' : 'calm';
 }
-// One template per character variant: the shared rig with only that variant's mesh. Fixed parts keep their vertex
-// colours; the Tint material is replaced per unit colour. Geometry and the fixed material are shared by every clone.
-function prepareModels(r, characters, naga, props) {
+
+// A unit appears: a rigged character or animal, a prop, or loot with its pillar of light.
+function createUnit(r, unit, owner, fresh) {
+  const object = new THREE.Group(); object.userData.kind = unit.kind; object.userData.unitId = unit.id;
+  let size = unit.kind === 'boss' ? 3.2 : unit.kind === 'tower' ? 2.2 : unit.kind === 'hero' || unit.kind === 'champion' ? 1.8 : unit.kind === 'warden' || unit.kind === 'npc' ? 1.4 : 1.1;
+  if (unit.kind === 'creep') size = 1.1 * (creepSizes[unit.model] || 1);
+  const model = unit.kind === 'loot' ? null : unit.kind === 'boss' && unit.model === 'naga' ? 'naga' : modelFor(unit);
+  const template = model && r.templates.get(model);
+  if (template) {
+    const scale = template.animal ? animalScales[model] || 2 : (model === 'naga' ? 1.2 : 1.9) * size;
+    if (template.animal) size = .8 + (animalScales[model] || 2) * .25;
+    const body = makeFigure(r, model, scale, unit.color);
+    Object.assign(object.userData, { figure: body.figure, mixer: body.mixer, actions: body.actions, clip: 'Idle', model, oneShot: 0, heading: unit.team === 0 || unit.team === 2 ? .8 : -2.3 });
+    body.actions.Idle.time = (unit.id * .37) % body.actions.Idle.getClip().duration; body.mixer.update(0);
+    body.figure.rotation.y = object.userData.heading;
+    object.add(body.figure); r.modelled = (r.modelled || 0) + 1;
+  } else if (unit.kind === 'loot') {
+    const body = r.props.get(lootProp(unit.model)).clone();
+    body.traverse(o => { if (o.isMesh) { o.castShadow = true; if (o.material.name === 'Tint') o.material = tintMaterial(r, unit.color); } });
+    body.scale.setScalar(unit.model === 'peti' ? 1.8 : 2.2);
+    object.add(body, r.fx.beam(unit.color));
+    Object.assign(object.userData, { body, loot: true, lootColor: unit.color });
+    size = .9; r.modelled = (r.modelled || 0) + 1;
+    if (fresh) r.fx.lootBurst(unit.x, unit.z, unit.color);
+  } else if (propKinds[unit.kind] && r.props.has(propKinds[unit.kind])) {
+    const body = r.props.get(propKinds[unit.kind]).clone();
+    body.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; if (o.material.name === 'Tint') o.material = tintMaterial(r, unit.color); } });
+    if (unit.kind === 'outpost') body.traverse(o => { if (o.isMesh) { o.material = o.material.clone(); o.material.transparent = true; } });
+    body.scale.setScalar({ tower: 1.1, outpost: 1.15, relic: 1.3, artifact: 1.3, flotsam: 1.4 }[unit.kind]);
+    object.add(body); object.userData.body = body; r.modelled = (r.modelled || 0) + 1;
+  } else {
+    const material = new THREE.MeshStandardMaterial({ color: unit.color, roughness: .45, metalness: .35, emissive: unit.color, emissiveIntensity: .4 });
+    const geometry = unit.kind === 'worker' ? new THREE.IcosahedronGeometry(1.3) : new THREE.ConeGeometry(size, size * 3, 6);
+    const body = new THREE.Mesh(geometry, material); body.position.y = size * 1.6; body.castShadow = true; object.add(body);
+    object.userData.body = body;
+  }
+  const ring = new THREE.Mesh(new THREE.RingGeometry(size + .4, size + .65, 24), new THREE.MeshBasicMaterial({ color: unit.owner === owner ? '#fff0b8' : unit.color, side: THREE.DoubleSide }));
+  ring.rotation.x = -Math.PI / 2; ring.position.y = .08; object.add(ring);
+  object.userData.ring = ring;
+  if (unit.kind === 'worker') {
+    const cargo = new THREE.Mesh(new THREE.BoxGeometry(.8, .8, .8), new THREE.MeshStandardMaterial({ color: '#e9c368', emissive: '#e9c368', emissiveIntensity: .3 })); cargo.position.set(0, 5.2, 0); object.add(cargo); object.userData.cargo = cargo;
+  }
+  if (!['relic', 'npc', 'artifact', 'flotsam', 'loot'].includes(unit.kind)) {
+    const bar = new THREE.Mesh(new THREE.BoxGeometry(3, .25, .35), new THREE.MeshBasicMaterial({ color: unit.team === 0 ? '#83c9ba' : unit.team === 3 ? '#e9c368' : '#dc8ba8' }));
+    bar.position.y = unit.kind === 'wild' ? size * 3 : size * 4.5; object.add(bar); object.userData.bar = bar;
+    if (unit.kind === 'creep' || unit.kind === 'wild') bar.visible = unit.health < unit.maxHealth;
+  }
+  object.position.set(unit.x, 0, unit.z); object.userData.target = new THREE.Vector3(unit.x, 0, unit.z); object.userData.health = unit.health;
+  r.units.set(unit.id, object); r.scene.add(object);
+  return object;
+}
+// A rigged figure from a template: shared geometry and fixed material, the Tint parts in the unit's colour.
+function makeFigure(r, model, scale, color) {
+  const template = r.templates.get(model); if (!template) return null;
+  const figure = cloneSkinned(template.scene); figure.scale.setScalar(scale);
+  figure.traverse(o => { if (o.isSkinnedMesh) { o.castShadow = true; if (o.material.name === 'Tint') o.material = tintMaterial(r, color); } });
+  const mixer = new THREE.AnimationMixer(figure), actions = {};
+  for (const clip of template.clips) actions[clip.name] = mixer.clipAction(clip);
+  actions.Walk.timeScale = 1.5; actions.Attack.timeScale = 1.25;
+  for (const name of ['Cast', 'Hit', 'Death']) { actions[name].setLoop(THREE.LoopOnce); actions[name].clampWhenFinished = true; }
+  actions.Idle.play(); mixer.update(0);
+  const object = new THREE.Group(); object.add(figure);
+  return { object, figure, mixer, actions };
+}
+// One template per character or animal variant: the shared rig with only that variant's mesh. Fixed parts keep their
+// vertex colours; the Tint material is replaced per unit colour. Geometry and the fixed material are shared by every
+// clone. The environment kit keeps each object's parts for instancing.
+function prepareModels(r, set, characters, naga, props, environment, animals) {
   const fixed = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .6, metalness: .1 }); fixed.name = 'Fixed'; fixed.userData.shared = true;
   r.fixedMaterial = fixed;
   const share = root => root.traverse(o => { if (o.isMesh) { o.geometry.userData.shared = true; if (o.material.name !== 'Tint') { o.material.dispose(); o.material = fixed; } } });
-  const rig = characters.scene.getObjectByName('CharacterRig');
-  const variants = rig.children.filter(c => c.isGroup || c.isSkinnedMesh).map(c => c.name);
-  share(characters.scene);
-  for (const name of variants) {
-    const copy = cloneSkinned(characters.scene);
-    const copyRig = copy.getObjectByName('CharacterRig');
-    for (const child of [...copyRig.children]) if ((child.isGroup || child.isSkinnedMesh) && child.name !== name) copyRig.remove(child);
-    r.templates.set(name, { scene: copy, clips: characters.animations });
-  }
+  const bound = new THREE.Sphere();
+  const variantsOf = (scene, rigName, animal, templates) => {
+    const rig = scene.getObjectByName(rigName);
+    const variants = rig.children.filter(c => c.isGroup || c.isSkinnedMesh);
+    share(scene);
+    // Each template clones the rig with one variant attached, not all of them.
+    variants.forEach(variant => rig.remove(variant));
+    for (const variant of variants) {
+      const name = variant.name;
+      rig.add(variant);
+      const copy = cloneSkinned(scene);
+      rig.remove(variant);
+      // Culling uses a sphere around the bind pose, padded for the widest clip, instead of skinning every vertex.
+      copy.traverse(o => { if (o.isSkinnedMesh) { o.geometry.computeBoundingSphere(); bound.copy(o.geometry.boundingSphere); bound.radius = bound.radius * 1.5 + .3; o.boundingSphere = bound.clone(); } });
+      templates.set(name, { scene: copy, clips: scene.userData.clips, animal });
+    }
+    variants.forEach(variant => rig.add(variant));
+  };
+  // Animals and the naga are shared by both character sets.
+  const common = new Map();
+  animals.scene.userData.clips = animals.animations;
+  variantsOf(animals.scene, 'AnimalRig', true, common);
   share(naga.scene);
-  r.templates.set('naga', { scene: naga.scene, clips: naga.animations });
+  naga.scene.traverse(o => { if (o.isSkinnedMesh) o.frustumCulled = false; });
+  common.set('naga', { scene: naga.scene, clips: naga.animations });
+  r.templateSets = { high: new Map(common), low: new Map(common) };
+  r.addCharacters = (which, gltf) => {
+    gltf.scene.userData.clips = gltf.animations;
+    variantsOf(gltf.scene, 'CharacterRig', false, r.templateSets[which]);
+    r.characterScenes.push(gltf.scene);
+  };
   share(props.scene);
   for (const child of props.scene.children) r.props.set(child.name, child);
-  r.characterScenes = [characters.scene, naga.scene, props.scene];
+  // The environment kit: one rougher vertex-colour material for nature and stone; glowing parts keep their own.
+  const nature = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .86, metalness: 0 }); nature.name = 'Fixed'; nature.userData.shared = true;
+  r.kit = { env: new Map(), heights: {} };
+  const box = new THREE.Box3();
+  for (const child of environment.scene.children) {
+    const parts = [];
+    child.traverse(o => {
+      if (!o.isMesh) return;
+      o.geometry.userData.shared = true;
+      let material = o.material;
+      if (/Glow|Lava/.test(material.name)) { material.userData.shared = true; material.toneMapped = true; }
+      else { if (material !== nature) material.dispose(); material = nature; }
+      parts.push({ geometry: o.geometry, material });
+    });
+    r.kit.env.set(child.name, parts);
+    box.setFromObject(child); r.kit.heights[child.name] = box.max.y;
+  }
+  r.characterScenes = [naga.scene, props.scene, environment.scene, animals.scene];
+  r.addCharacters(set, characters);
+  r.templates = r.templateSets[set];
+}
+// After the quality changes: loads the other character set if needed, then rebuilds the characters on screen from it.
+async function ensureCharacters(r) {
+  const set = characterSet(r.options), templates = r.templateSets?.[set];
+  if (!templates) return;
+  if (!templates.has('prajurit')) {
+    if (r.loadingSet === set) return;
+    r.loadingSet = set;
+    try {
+      const gltf = await new GLTFLoader().loadAsync(new URL(`./models/${characterFiles[set]}`, import.meta.url).href);
+      if (r.disposed) { release(gltf.scene, true); return; }
+      r.addCharacters(set, gltf);
+    } catch (error) { console.warn('Battle of Nusantara: characters could not load', error); return; }
+    finally { r.loadingSet = null; }
+  }
+  if (r.disposed || characterSet(r.options) !== set || r.templates === templates) return;
+  r.templates = templates;
+  // Every unit is drawn again from the new set at the next snapshot.
+  for (const object of r.units.values()) { object.userData.mixer?.stopAllAction(); r.scene.remove(object); release(object); }
+  r.units.clear();
+  applyMap(r, true);
 }
 function tintMaterial(r, color) {
   let material = r.tintMaterials.get(color);
@@ -701,11 +934,11 @@ function playOnce(object, name) {
   object.userData.clip = name;
 }
 // A visible ultimate, matching the rules in Match.cs: a burst ring, chain lightning to the enemies that were hurt,
-// a leap trail with a shockwave, or the southern wave.
+// a leap trail with a shockwave, or the southern wave. Particles and a sound go with each.
 function ultimateEffect(r, kind, from, hero, state) {
   const group = new THREE.Group(), x = hero.x, z = hero.z;
   const color = { chain: '#bfeaff', leap: '#c7a6ff', wave: '#7fe0d0', burst: '#f2d27a' }[kind];
-  const ring = new THREE.Mesh(new THREE.RingGeometry(.8, 1.4, 48), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: .9, side: THREE.DoubleSide, depthWrite: false }));
+  const ring = new THREE.Mesh(new THREE.RingGeometry(.8, 1.4, 48), new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(1.8), transparent: true, opacity: .9, side: THREE.DoubleSide, depthWrite: false }));
   ring.rotation.x = -Math.PI / 2; ring.position.set(x, .3, z); group.add(ring);
   const reach = { chain: 6, leap: 14, wave: 20, burst: 20 }[kind];
   if (kind === 'chain') {
@@ -717,22 +950,24 @@ function ultimateEffect(r, kind, from, hero, state) {
       for (let k = 0; k <= 6; k++) { const t = k / 6; points.push(new THREE.Vector3(px + (target.u.x - px) * t + (k % 6 ? (Math.random() - .5) * 1.6 : 0), 3 + (k % 6 ? Math.random() * 1.5 : 0), pz + (target.u.z - pz) * t + (k % 6 ? (Math.random() - .5) * 1.6 : 0))); }
       px = target.u.x; pz = target.u.z;
     }
-    if (points.length > 1) group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color: '#e6f8ff', transparent: true })));
+    if (points.length > 1) { group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color: new THREE.Color('#e6f8ff').multiplyScalar(2.5), transparent: true }))); r.fx.lightning(points); }
     r.flash = Math.max(r.flash, .6);
   } else if (kind === 'leap') {
     const arc = []; for (let k = 0; k <= 16; k++) { const t = k / 16; arc.push(new THREE.Vector3(from.x + (x - from.x) * t, Math.sin(t * Math.PI) * 9 + 1, from.z + (z - from.z) * t)); }
-    group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(arc), new THREE.LineBasicMaterial({ color, transparent: true })));
+    group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(arc), new THREE.LineBasicMaterial({ color: new THREE.Color(color).multiplyScalar(2), transparent: true })));
+    r.fx.shockwave(x, z, color);
   } else if (kind === 'wave') {
     const wall = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 2.5, 48, 1, true), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: .5, side: THREE.DoubleSide, depthWrite: false }));
     wall.position.set(x, 1.2, z); group.add(wall);
-  }
+    for (let k = 0; k < 6; k++) { const a = k * Math.PI / 3; r.fx.splash(x + Math.cos(a) * 6, z + Math.sin(a) * 6); }
+  } else r.fx.magic(x, z, color);
   r.scene.add(group);
   r.effects.push({ object: group, age: 0, duration: kind === 'chain' ? .45 : .9, step: t => {
     const radius = 1 + t * reach;
     ring.scale.setScalar(radius); ring.material.opacity = .9 * (1 - t);
     group.children.forEach(child => { if (child !== ring) { if (child.isLine) child.material.opacity = 1 - t; else { child.scale.set(radius, 1 - t * .6, radius); child.material.opacity = .5 * (1 - t); } } });
   } });
-  r.tone(kind === 'chain' ? 1200 : 220, kind === 'chain' ? 300 : 90, 0, .5, 2.2, kind === 'chain' ? 'sawtooth' : 'sine');
+  r.sound(ultimateSounds[kind], x, z, 1.1);
 }
 // Cutscenes are lists of shots; each shot moves the camera along a path and looks along another.
 function startCutscene(r, kind, shots) {
@@ -743,13 +978,14 @@ function startCutscene(r, kind, shots) {
 }
 const glide = (a, b) => (t, out) => out.set(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t);
 function introShots(r, state, owner) {
-  const hero = state.units.find(u => u.kind === 'hero' && u.owner === owner), english = r.options.language === 'en';
-  const hx = hero?.x ?? 50, hz = hero?.z ?? 50, rise = [145, 150, 170], center = [50, 0, 50];
+  const hero = state.units.find(u => u.kind === 'hero' && u.owner === owner), english = r.options.language === 'en', size = r.size;
+  const hx = hero?.x ?? size / 2, hz = hero?.z ?? size / 2, rise = playOffset(size, 1, new THREE.Vector3()).add(new THREE.Vector3(size / 2, 0, size / 2)).toArray(), center = [size / 2, 0, size / 2];
   // The last shot: a low orbit around the player's hero that rises into the play camera.
   const toPlay = (title, line, duration) => ({ title, line, duration,
     camera: (t, out) => { const angle = 2.2 + t * 1.5, x = hx + Math.cos(angle) * 34, z = hz + Math.sin(angle) * 34, e = t * t; out.set(x + (rise[0] - x) * e, 15 + (rise[1] - 15) * e, z + (rise[2] - z) * e); },
     look: (t, out) => { const e = t * t; out.set(hx + (center[0] - hx) * e, 3 * (1 - e), hz + (center[2] - hz) * e); } });
-  if (state.mode === 0) return [toPlay('RTS Skirmish', english ? 'Build outposts, gather gold, bring down the enemy base.' : 'Bangun pos, kumpulkan emas, runtuhkan markas lawan.', 5)];
+  const mapName = r.mapDef ? (english ? r.mapDef.nameEn : r.mapDef.name) : '';
+  if (state.mode === 0) return [toPlay('RTS Skirmish', (mapName ? `${mapName}. ` : '') + (english ? 'Build outposts, gather gold, bring down the enemy base.' : 'Bangun pos, kumpulkan emas, runtuhkan markas lawan.'), 5)];
   if (state.mode === 1) return [toPlay('MOBA Arena', english ? 'Push the lane, break the towers, destroy the base.' : 'Dorong jalur, runtuhkan menara, hancurkan markas.', 5)];
   // Adventure: an authored tour of the places the story will lead to.
   return [
@@ -769,21 +1005,25 @@ function endingShots(r, state) {
 }
 // Environmental storytelling for Adventure: props that explain the place without a line of dialogue. None block movement.
 function buildStory(r) {
-  const wood = new THREE.MeshStandardMaterial({ color: '#5b4330', roughness: 1 }), stone = new THREE.MeshStandardMaterial({ color: '#6c7a78', roughness: .95 });
-  const canvas = new THREE.MeshStandardMaterial({ color: '#8a7350', roughness: 1, side: THREE.DoubleSide }), iron = new THREE.MeshStandardMaterial({ color: '#8d979a', roughness: .5, metalness: .7 });
+  const wood = new THREE.MeshStandardMaterial({ color: '#5b4330', roughness: 1 });
+  const iron = new THREE.MeshStandardMaterial({ color: '#8d979a', roughness: .5, metalness: .7 });
   const add = (geometry, material, x, y, z, rx = 0, ry = 0, rz = 0) => { const mesh = new THREE.Mesh(geometry, material); mesh.position.set(x, y, z); mesh.rotation.set(rx, ry, rz); mesh.castShadow = true; r.story.add(mesh); return mesh; };
+  // Kit objects as single meshes: they share the environment geometry and materials.
+  const kit = (name, x, z, scale = 1, yaw = 0, y = 0, rx = 0) => {
+    const group = new THREE.Group();
+    for (const part of r.kit.env.get(name) || []) { const mesh = new THREE.Mesh(part.geometry, part.material); mesh.castShadow = true; mesh.receiveShadow = true; group.add(mesh); }
+    group.position.set(x, y, z); group.rotation.set(rx, yaw, 0); group.scale.setScalar(scale); r.story.add(group); return group;
+  };
   // The Keeper's camp: he has lived beside the path for a long time.
-  add(new THREE.ConeGeometry(4, 5, 4), canvas, 25, 2.5, 16, 0, .6);
-  add(new THREE.CylinderGeometry(.12, .12, 7, 5), wood, 34, 3.5, 17);
-  add(new THREE.BoxGeometry(.1, 2.2, 3), new THREE.MeshStandardMaterial({ color: '#83c9ba', roughness: .8, side: THREE.DoubleSide }), 34, 5.6, 18.5);
+  kit('hut', 25, 16, 1, .6); kit('banner', 34, 17, .8, .3); kit('goods', 29, 20, .9, 1.1); kit('lantern', 31, 15, 1);
   for (let i = 0; i < 3; i++) add(new THREE.CylinderGeometry(.22, .22, 2.4, 5), wood, 33, .3, 23, Math.PI / 2, i * 2.1);
-  r.flame = add(new THREE.ConeGeometry(.7, 1.8, 6), new THREE.MeshBasicMaterial({ color: '#ffb35c' }), 33, 1.2, 23); r.flame.castShadow = false;
+  r.flame = add(new THREE.ConeGeometry(.7, 1.8, 6), new THREE.MeshBasicMaterial({ color: new THREE.Color('#ffb35c').multiplyScalar(1.5) }), 33, 1.2, 23); r.flame.castShadow = false;
   r.fire = new THREE.PointLight('#ff9a4a', 60, 26, 2); r.fire.position.set(33, 2.6, 23); r.story.add(r.fire);
   // Each inscription stands in the remains of a small shrine: some pillars upright, some fallen.
   for (const [x, z] of [[27, 29], [60, 38], [75, 72]])
     for (let i = 0; i < 5; i++) {
-      const angle = i * 1.2566 + x, fallen = (i + x) % 3 === 0, px = x + Math.cos(angle) * 4.6, pz = z + Math.sin(angle) * 4.6;
-      add(new THREE.CylinderGeometry(.5, .6, fallen ? 4.5 : 3 + (i % 3) * 1.4, 6), stone, px, fallen ? .5 : 1.5 + (i % 3) * .7, pz, fallen ? Math.PI / 2 : 0, angle, fallen ? .3 : 0);
+      const angle = i * 1.2566 + x, fallen = (i + x) % 3 === 0, px = x + Math.cos(angle) * 4.8, pz = z + Math.sin(angle) * 4.8;
+      kit('ruin_pillar', px, pz, .55 + (i % 3) * .08, angle, fallen ? .6 : 0, fallen ? Math.PI / 2 : 0);
     }
   // An old battlefield on the way to the sealed chamber: weapons left where their owners fell.
   for (let i = 0; i < 12; i++) {
@@ -791,25 +1031,45 @@ function buildStory(r) {
     if (i % 3) add(new THREE.BoxGeometry(.16, 2.6, .05), iron, x, 1, z, .3 + (i % 4) * .12, i, .2);
     else add(new THREE.CylinderGeometry(.9, .9, .12, 8), wood, x, .12, z, .15, i, 0);
   }
+  // The wreck on the western reef: something happened here before the player arrived.
+  const wreck = new THREE.Group();
+  const hull = new THREE.Mesh(new THREE.BoxGeometry(5, 4, 16), wood); hull.rotation.set(.1, 0, .5); wreck.add(hull);
+  const mast = new THREE.Mesh(new THREE.CylinderGeometry(.3, .4, 15, 6), wood); mast.position.set(2.5, 6, -1); mast.rotation.z = -.75; wreck.add(mast);
+  const yard = new THREE.Mesh(new THREE.BoxGeometry(.4, .4, 8), wood); yard.position.set(5, 9, -1); yard.rotation.z = -.75; wreck.add(yard);
+  wreck.position.set(-14, SEA_LEVEL - 1, 66); wreck.rotation.y = .5; r.story.add(wreck);
+  // The Mystic Cave gate: a split gate whose gap is closed by a shimmering seal while the door is an obstacle.
+  kit('gate_bentar', 84, 30, 1.7);
+  const seal = new THREE.Mesh(new THREE.PlaneGeometry(3.6, 7.5), new THREE.ShaderMaterial({
+    uniforms: { uTime: r.fx.beamUniforms.uTime }, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+    vertexShader: 'varying vec2 vUv;\nvoid main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    fragmentShader: 'uniform float uTime; varying vec2 vUv;\nvoid main() { float band = .5 + .5 * sin(vUv.y * 18.0 - uTime * 3.0 + sin(vUv.x * 9.0 + uTime) * 1.5); float edge = smoothstep(.0, .25, vUv.x) * smoothstep(1.0, .75, vUv.x) * smoothstep(1.0, .7, vUv.y); gl_FragColor = vec4(vec3(.55, .35, 1.0) * (1.2 + band), (.25 + .35 * band) * edge);\n#include <colorspace_fragment>\n}'
+  }));
+  seal.position.set(84, 3.8, 30); r.story.add(seal); r.seal = seal;
+  seal.visible = !!r.state?.obstacles?.some(o => o.kind === 'door');
 }
 // Geometry and materials shared between characters are kept unless `all` is set (on dispose).
 function release(root, all = false) {
   const geometries = new Set(), materials = new Set();
-  root.traverse(object => { if (object.geometry && (all || !object.geometry.userData.shared)) geometries.add(object.geometry); if (object.material) (Array.isArray(object.material) ? object.material : [object.material]).forEach(m => { if (all || !m.userData.shared) materials.add(m); }); });
+  // Every rigged clone has its own skeleton, whose bone texture must go too.
+  root.traverse(object => { if (object.isSkinnedMesh) object.skeleton?.dispose(); if (object.geometry && (all || !object.geometry.userData.shared)) geometries.add(object.geometry); if (object.material) (Array.isArray(object.material) ? object.material : [object.material]).forEach(m => { if (all || !m.userData.shared) materials.add(m); }); });
   geometries.forEach(g => g.dispose()); materials.forEach(m => { for (const value of Object.values(m)) if (value?.isTexture) value.dispose(); m.dispose(); });
 }
 export function dispose() {
   const r = runtime; if (!r) return; r.disposed = true;
   r.renderer.setAnimationLoop(null); r.resize?.disconnect();
-  window.removeEventListener('keydown', r.key); window.removeEventListener('pointerdown', r.startAudio);
+  window.removeEventListener('keydown', r.key); window.removeEventListener('keyup', r.keyUp); window.removeEventListener('blur', r.blur);
+  window.removeEventListener('pointerdown', r.startAudio); window.removeEventListener('keydown', r.startAudio);
+  document.removeEventListener('pointerdown', r.uiClick, true);
   r.renderer.domElement.removeEventListener('pointerdown', r.down);
   r.renderer.domElement.removeEventListener('pointermove', r.dragMove);
   r.renderer.domElement.removeEventListener('pointerup', r.up);
   r.renderer.domElement.removeEventListener('pointercancel', r.dragCancel);
+  r.renderer.domElement.removeEventListener('wheel', r.wheel);
   r.box?.remove(); r.cine?.remove();
   r.renderer.domElement.removeEventListener('pointermove', r.hover);
   r.renderer.domElement.removeEventListener('contextmenu', r.contextMenu);
   r.element.parentElement?.removeEventListener('pointerdown', r.mapClick);
-  r.mixers.forEach(m => m.stopAllAction()); release(r.scene, true); (r.characterScenes || []).forEach(scene => release(scene, true)); r.templates?.forEach(t => release(t.scene, true)); r.tintMaterials.forEach(m => m.dispose()); r.fixedMaterial?.dispose(); r.voice?.pause(); r.renderer.dispose(); r.renderer.domElement.remove();
-  r.audio?.close(); runtime = null;
+  r.life?.dispose(release); r.landscape?.dispose(); r.dressing?.dispose(); r.post?.dispose(); r.fx.dispose();
+  r.mixers.forEach(m => m.stopAllAction()); release(r.scene, true); (r.characterScenes || []).forEach(scene => release(scene, true)); Object.values(r.templateSets || {}).forEach(set => set.forEach(t => release(t.scene, true))); r.tintMaterials.forEach(m => m.dispose()); r.fixedMaterial?.dispose(); clearSway(); r.voice?.pause(); r.renderer.dispose(); r.renderer.domElement.remove();
+  r.audio.dispose(); runtime = null;
 }

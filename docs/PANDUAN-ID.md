@@ -4,9 +4,9 @@ Dibuat oleh Ariana Mischa Fadhila dari Syubadubin Studios.
 
 ## Instalasi dan menjalankan
 
-Gunakan .NET SDK 10 dan jalankan perintah pada README dari direktori repositori. WPF memerlukan Windows dan WebView2 Runtime. Host browser dapat dijalankan terpisah dari desktop. Linux/macOS dapat membangun proyek Server saja, bukan seluruh solusi WPF.
+Gunakan .NET SDK 10 dan jalankan perintah pada README dari direktori repositori. WPF memerlukan Windows dan WebView2 Runtime. Host browser dapat dijalankan terpisah dari desktop. Di Linux dan macOS, `src/BattleNusantara.Photino` adalah game desktopnya (di Linux memerlukan WebKitGTK 4.1) dan proyek Server berjalan seperti biasa; bangun kedua proyek itu, bukan seluruh solusi yang proyek WPF-nya khusus Windows. Unduhan siap pakai untuk Linux dan macOS tersedia di halaman Releases (lihat README).
 
-Menu utama menampilkan candi GLB buatan Blender. Pilih **Pahlawan** untuk melihat HP, damage, peran, dan ultimate. Pemilihan hero memengaruhi statistik simulasi; visual unit masih berupa penanda geometris, bukan model karakter final.
+Menu utama menampilkan candi Borobudur Quantum buatan Blender di lembah antara gunung api dan laut. Pilih **Pahlawan** untuk melihat HP, damage, peran, dan ultimate. Pemilihan hero memengaruhi statistik simulasi; setiap unit berupa model Blender ber-rig.
 
 ![Pilihan pahlawan](screenshots/heroes.png)
 
@@ -114,7 +114,7 @@ Belum ada reset kata sandi: bila lupa, buat akun baru. Pada server HTTP biasa ka
 
 ## Pengaturan dan pemecahan masalah
 
-Bahasa, kualitas grafis, pengurangan animasi, sinematik pembuka, dan volume ambience disimpan di localStorage. Audio sintesis dimulai setelah interaksi pengguna. Mode hemat daya mengurangi resolusi rendering dan mematikan bayangan/partikel. Kredit dapat dihentikan dengan hover atau fokus; pengurangan animasi mengubahnya menjadi area gulir biasa.
+Bahasa, kualitas grafis, pengurangan animasi, sinematik pembuka, suara dialog, dan volume suara disimpan di localStorage. Suara dimulai setelah klik atau tombol pertama. Mode hemat daya mengurangi resolusi rendering, mematikan bayangan dan bloom, memakai karakter versi ringan, seperempat dekorasi alam, dan lebih sedikit partikel. Pada komputer tanpa GPU yang dapat dipakai (rendering perangkat lunak), kualitas tinggi juga berjalan tanpa bloom dan bayangan. Kredit dapat dihentikan dengan hover atau fokus; pengurangan animasi mengubahnya menjadi area gulir biasa.
 
 Jika arena kosong, periksa dukungan WebGL2 dan akselerasi GPU. Jika aset hilang setelah checkout parsial, jalankan `npm ci` dan `npm run vendor`; GLB harus tersedia di `src/BattleNusantara.UI/wwwroot/models/`. Untuk kegagalan LAN, periksa alamat, firewall port 5080, dan kapasitas ruang. Jangan menggunakan `0.0.0.0` sebagai alamat tujuan pemain.
 
@@ -132,7 +132,7 @@ Distribusikan seluruh direktori hasil publish, termasuk aset. WebView2 tetap dip
 
 ## Dunia, cuaca, dan sinematik pembuka
 
-Setiap pertandingan dibuka dengan gerakan kamera lima detik; tekan tombol apa pun atau klik untuk melewatinya, atau hilangkan centang **Sinematik pembuka** di Pengaturan. Label di samping jam pertandingan menunjukkan cuaca dan waktu. Satu hari berlangsung enam menit dan cuaca berganti tiap 45 detik: cerah, kabut, hujan, atau badai. **Kabut dan badai memperpendek pandangan** (menjadi 80% dan 75%) semua unit; gelap dan hujan hanya tampilan. Bila **Kurangi animasi** aktif, tidak ada sinematik, hujan yang jatuh, maupun kilat; label tetap memberi tahu cuacanya. Suara mengikuti pertandingan: hujan terdengar, dan lapisan tegang dengan dentum genderang muncul saat unit terluka.
+Setiap pertandingan dibuka dengan gerakan kamera lima detik; tekan tombol apa pun atau klik untuk melewatinya, atau hilangkan centang **Sinematik pembuka** di Pengaturan. Label di samping jam pertandingan menunjukkan cuaca dan waktu. Satu hari berlangsung enam menit dan cuaca berganti tiap 45 detik: cerah, kabut, hujan, atau badai. **Kabut dan badai memperpendek pandangan** (menjadi 80% dan 75%) semua unit; gelap dan hujan hanya tampilan. Bila **Kurangi animasi** aktif, tidak ada sinematik, hujan yang jatuh, maupun kilat; label tetap memberi tahu cuacanya. Suara mengikuti pertandingan: hujan dan guntur terdengar, dan lapisan perang pada musik naik saat unit terluka.
 
 ![Hujan saat senja](screenshots/weather-rain.png)
 
@@ -152,7 +152,52 @@ Di Adventure, berjalanlah ke pantai barat untuk menemui Nakhoda Tua. Ia memberi 
 
 ## Suara
 
-Dialog bersuara dalam bahasa yang dipilih; hilangkan centang **Suara dialog** di Pengaturan untuk hanya membaca. Musik mengikuti pertandingan dan menguat saat pertempuran dimulai. Kabut dan badai kini memperpendek jarak pandang semua pihak di semua mode.
+Dialog bersuara dalam bahasa yang dipilih; hilangkan centang **Suara dialog** di Pengaturan untuk hanya membaca. Layar judul memutar tema "Borobudur Quantum". Dalam pertandingan terdengar musik eksplorasi, dan saat pertempuran pecah lapisan perangnya (taiko, string, brass, dan koor) naik di atasnya, seirama dengan musik. Stinger menandai kemenangan atau kekalahan. Suasana siang (angin dan burung), malam (jangkrik dan katak), dan hujan terdengar, dan efek seperti pukulan, ultimate, harta, naik level, kamp yang ditaklukkan, membangun, menambang, serta suara hewan datang dari tempat kejadiannya di layar. **Volume suara** di Pengaturan mengatur keras-lemahnya.
+
+## Peta
+
+Setiap mode memiliki peta sendiri, dipilih di panel bermain pada **Peta**; ukurannya tertulis di samping nama.
+
+| Peta | Mode | Ukuran | Ciri khas |
+| --- | --- | --- | --- |
+| Lembah Candi | RTS | sedang (100) | Reruntuhan candi, tiga tambang, empat kamp |
+| Pesisir Selatan | RTS | kecil (80) | Pantai sempit di antara dua laguna; pertempuran cepat dan rapat |
+| Hutan Larangan | RTS | besar (140) | Rumpun yang menutup pandangan, empat tambang, tujuh kamp termasuk kamp purba |
+| Arena Jagat | MOBA | sedang (100) | Tiga jalur, Naga Basuki di hutan selatan, empat kamp |
+| Gelanggang Sabana | MOBA | kecil (80) | Jalur pendek, pertempuran lebih cepat |
+| Jembatan Naga | MOBA | besar (140) | Sungai dengan tiga jembatan dan arungan naga, tujuh kamp |
+| Pulau Prasasti | Adventure | sedang (100) | Pulau cerita |
+
+Air menghalangi langkah tetapi tidak pandangan; reruntuhan, batu, dan rumpun menghalangi keduanya. Peta taktis RTS digambar sesuai ukuran peta.
+
+![Hutan Larangan](screenshots/map-hutan-larangan.png)
+
+## Kamera
+
+Putar **roda tetikus** untuk mendekat atau melihat seluruh peta. Geser dengan **tombol panah** atau dengan menyeret **tombol tengah tetikus**. **F** memusatkan pada hero; **Home** kembali ke seluruh peta.
+
+## Kamp monster dan harta
+
+Kamp ditandai obor dan lingkaran batu, serta lingkaran berwarna sesuai tingkat pada peta taktis RTS. Kamp **Lemah** berisi tiga tuyul; **Sedang** siluman kera dan siluman macan; **Kuat** siluman buaya dan genderuwo; **Purba** Banaspati, roh api, dengan pengawal siluman macan. Monster menyerang unitmu yang mendekat dan memanggil kawan sekampnya; mereka hanya mengejar sampai batas tertentu lalu pulang untuk memulihkan diri, sehingga kamu bisa mundur lalu kembali. Pasukanmu membela diri, tetapi hanya hero yang mendatangi kamp atas kemauan sendiri; pasukan musuh tidak mengganggu kamp.
+
+Kamp yang ditaklukkan kembali setelah satu sampai empat menit (kamp yang lebih kuat lebih lama) dan menjatuhkan harta yang ditandai pilar cahaya berwarna sesuai kelangkaannya. Langkahkan hero ke atasnya untuk mengambilnya selama sisa pertandingan:
+
+| Harta | Kelangkaan | Efek |
+| --- | --- | --- |
+| Jamu Kunyit Asam | biasa | +20 HP dan memulihkan 60% |
+| Batu Asah | biasa | +4 serangan |
+| Gelang Akar Bahar | biasa | +40 HP |
+| Keris Luk Tujuh | langka | +10 serangan |
+| Zirah Sisik Naga | langka | +110 HP |
+| Terompah Kilat | langka | +15% kecepatan |
+| Mustika Banaspati | legendaris | +15 serangan, +150 HP, +10% kecepatan, pulih penuh |
+| Peti Harta | harta | +200 emas |
+
+Kamp lemah menjatuhkan barang biasa separuh waktu; kamp sedang satu barang biasa dan kadang barang langka; kamp kuat satu barang langka dan kadang barang biasa; kamp purba barang legendaris, barang langka, dan peti harta. Temuanmu tercantum di bawah HP hero. Di MOBA, monster juga memberi pengalaman.
+
+## Hewan liar dan penduduk
+
+Hewan tinggal di wilayah yang cocok baginya. **Kancil** lari dari siapa pun. **Kerbau** merumput dan hanya melawan bila dipukul. **Babi hutan** menyeruduk apa pun yang terlalu dekat lalu kembali ke tempatnya. Di RTS, **kera pencuri** merampas emas yang dibawa pekerja dan membawanya pulang; kalahkan sebelum ia tiga puluh detik di sarangnya untuk merebutnya kembali. Hewan memberi sedikit emas bila dikalahkan pihakmu dan muncul lagi kemudian. Penduduk desa, ayam, burung, kupu-kupu, dan kunang-kunang adalah pemandangan: mereka hanya ada di layarmu dan tidak ikut bertempur.
 
 ## Tameng
 

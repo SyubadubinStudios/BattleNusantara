@@ -231,8 +231,10 @@ public sealed class SideQuestTests
     {
         var node = JsonNode.Parse(new Match(GameMode.Adventure, "gajah-mada", 5).Save()!)!.AsObject();
         node["Version"] = 1; node.Remove("Seed"); node.Remove("SideStarted"); node.Remove("SideDone");
+        node.Remove("Camps"); node.Remove("Wild"); node.Remove("Treasures");
         var units = node["Units"]!.AsArray();
-        foreach (var unit in units.ToArray()) if ((string?)unit!["Model"] == Story.CaptainNpc) units.Remove(unit);
+        foreach (var unit in units.ToArray())
+            if ((string?)unit!["Model"] == Story.CaptainNpc || (string?)unit["Kind"] is "creep" or "wild" or "loot") units.Remove(unit);
         foreach (var unit in units) unit!.AsObject().Remove("Model");
         var loaded = Match.Load(node.ToJsonString())!;
         Assert.NotNull(loaded);
