@@ -132,6 +132,17 @@ def is_macho(path):
 def pack_mac(source, rid, archive):
     """Stages the .app bundle and the LAN server on disk, signs them ad hoc on macOS (Apple silicon refuses unsigned
     arm64 programs), then zips the stage keeping the executable bits."""
+    if sys.platform == "darwin":
+        # Each Mach-O program and library is signed ad hoc on its own, before it goes into the bundle: inside the .app,
+        # codesign treats the main program as the bundle and the dotted folders (wwwroot/_content/BattleNusantara.UI) as
+        # nested bundles. The signature is embedded in each file, which is what Apple silicon checks; the bundle is not sealed.
+        signed = 0
+        for root in (source / "game", source / "server"):
+            for path in sorted(root.rglob("*")):
+                if path.is_file() and is_macho(path):
+                    subprocess.run(["codesign", "--force", "--sign", "-", str(path)], check=True)
+                    signed += 1
+        print(f"{rid}: signed {signed} Mach-O files ad hoc")
     stage = PUBLISH / f"{rid}-stage"
     if stage.exists():
         shutil.rmtree(stage)
@@ -146,14 +157,6 @@ def pack_mac(source, rid, archive):
         for path in stage.rglob("*"):
             if path.is_file():
                 path.chmod(mode(path))
-        # Each Mach-O program and library is signed on its own. The bundle itself is not sealed: codesign takes folders
-        # with a dot in their name (wwwroot/_content/BattleNusantara.UI) for nested bundles and refuses to seal it.
-        signed = 0
-        for path in sorted(stage.rglob("*")):
-            if path.is_file() and is_macho(path):
-                subprocess.run(["codesign", "--force", "--sign", "-", str(path)], check=True)
-                signed += 1
-        print(f"{rid}: signed {signed} Mach-O files ad hoc")
     else:
         print(f"warning: {rid} was not signed; build it on macOS, or Apple silicon will refuse to run it.")
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zip_file:

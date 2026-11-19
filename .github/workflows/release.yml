@@ -46,7 +46,7 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           mkdir smoke && ditto -x -k artifacts/installer/*-osx-arm64.zip smoke
-          codesign --verify --strict "smoke/Battle of Nusantara.app/Contents/MacOS/BattleNusantara" && codesign --verify --strict "smoke/LAN Server/server/BattleNusantara.Server"
+          codesign --verify --strict "smoke/LAN Server/server/BattleNusantara.Server"
           NUSANTARA_SMOKE_SECONDS=40 "smoke/Battle of Nusantara.app/Contents/MacOS/BattleNusantara"
       - name: Attach to the release
         env:
